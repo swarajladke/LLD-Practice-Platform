@@ -9,11 +9,24 @@ import {
 import { LlmEvaluationResponseSchema } from './llm/LlmSchemas.js';
 
 export class LlmEvaluator implements Evaluator {
-  readonly id = 'llm';
+  readonly id: string;
+  private readonly llmClient: LlmClient;
+  private readonly isSupportedFn?: (ctx: EvaluationContext) => boolean;
 
-  constructor(private readonly llmClient: LlmClient) {}
+  constructor(
+    llmClient: LlmClient,
+    id: string = 'llm',
+    isSupportedFn?: (ctx: EvaluationContext) => boolean
+  ) {
+    this.llmClient = llmClient;
+    this.id = id;
+    this.isSupportedFn = isSupportedFn;
+  }
 
-  supports(_ctx: EvaluationContext): boolean {
+  supports(ctx: EvaluationContext): boolean {
+    if (this.isSupportedFn) {
+      return this.isSupportedFn(ctx);
+    }
     return true;
   }
 
@@ -41,6 +54,7 @@ export class LlmEvaluator implements Evaluator {
         evidenceRef: quoteRef(f.quote, f.sourcePath),
         concern: f.concern,
         suggestion: f.suggestion,
+        evaluatorId: this.id,
       }));
 
       return {
@@ -48,7 +62,7 @@ export class LlmEvaluator implements Evaluator {
         findings,
         score: dim.score,
         confidence: dim.confidence,
-        evaluatorId: this.id,
+        evaluatorIds: [this.id],
       };
     });
   }

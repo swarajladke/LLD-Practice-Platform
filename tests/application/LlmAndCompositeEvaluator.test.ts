@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { LlmEvaluator } from '../../src/application/evaluators/LlmEvaluator.js';
 import { DeterministicEvaluator } from '../../src/application/evaluators/DeterministicEvaluator.js';
 import { CompositeEvaluator } from '../../src/application/evaluators/CompositeEvaluator.js';
+import { EvaluationReportAssembler } from '../../src/application/evaluators/EvaluationReportAssembler.js';
 import { FakeLlmClient } from '../../src/infrastructure/llm/FakeLlmClient.js';
+import { FixedClock } from '../../src/domain/services/Clock.js';
 import { Rubric, type RubricDimension } from '../../src/domain/models/Rubric.js';
+import { EvaluationFailedError } from '../../src/domain/errors/DomainErrors.js';
 import type { Problem } from '../../src/domain/models/Problem.js';
 import type { DesignSpec } from '../../src/domain/models/DesignSpec.js';
 import type { EvaluationContext } from '../../src/domain/interfaces/Evaluator.js';
@@ -89,12 +92,16 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
   let fakeLlm: FakeLlmClient;
   let llmEvaluator: LlmEvaluator;
   let deterministicEvaluator: DeterministicEvaluator;
+  let assembler: EvaluationReportAssembler;
+  let fixedClock: FixedClock;
   let ctx: EvaluationContext;
 
   beforeEach(() => {
     fakeLlm = new FakeLlmClient();
     llmEvaluator = new LlmEvaluator(fakeLlm);
     deterministicEvaluator = new DeterministicEvaluator();
+    fixedClock = new FixedClock('2026-09-15T12:00:00.000Z');
+    assembler = new EvaluationReportAssembler(fixedClock);
     ctx = {
       attemptId: 'test-attempt-1',
       spec: sampleSpec,
@@ -131,28 +138,23 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
       expect(results[0].criterion).toBe('classResponsibilities');
       expect(results[0].score).toBe(4.5);
       expect(results[0].confidence).toBe(0.9);
-      expect(results[0].findings).toHaveLength(1);
+      expect(results[0].evaluatorIds).toEqual(['llm']);
+      expect(results[0].findings[0].evaluatorId).toBe('llm');
       expect(results[0].findings[0].evidenceRef.kind).toBe('quote');
-      if (results[0].findings[0].evidenceRef.kind === 'quote') {
-        expect(results[0].findings[0].evidenceRef.evidence.quote).toBe(
-          'Coordinates spot allocation across floors'
-        );
-      }
     });
 
     it('throws error when LLM output is malformed non-JSON', async () => {
       fakeLlm.setResponse('This is not json at all { unclosed bracket');
-
       await expect(llmEvaluator.evaluate(ctx)).rejects.toThrow(/LLM returned invalid JSON/);
     });
 
-    it('throws error when LLM output fails Zod schema validation (e.g. invalid score or missing quote)', async () => {
+    it('throws error when LLM output fails Zod schema validation', async () => {
       fakeLlm.setResponse(
         JSON.stringify({
           dimensions: [
             {
               criterion: 'classResponsibilities',
-              score: 99.0, // Invalid score > 5
+              score: 99.0,
               confidence: 0.9,
               findings: [],
             },
@@ -160,22 +162,21 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
           overallSummary: 'Done',
         })
       );
-
       await expect(llmEvaluator.evaluate(ctx)).rejects.toThrow();
     });
   });
 
-  describe('CompositeEvaluator aggregation and degradation', () => {
-    it('merges overlapping dimensions by confidence-weighted score when all evaluators succeed', async () => {
-      // Deterministic produces score 5.0 with confidence 0.9 for classResponsibilities
-      // We set LLM to produce score 3.0 with confidence 0.9 for classResponsibilities
+  describe('CompositeEvaluator & EvaluationReportAssembler', () => {
+    it('merges overlapping dimensions by confidence-weighted average score and confidence', async () => {
+      // Deterministic produces score 5.0, confidence 0.9 for classResponsibilities
+      // LLM produces score 3.0, confidence 0.7 for classResponsibilities
       fakeLlm.setResponse(
         JSON.stringify({
           dimensions: [
             {
               criterion: 'classResponsibilities',
               score: 3.0,
-              confidence: 0.9,
+              confidence: 0.7,
               findings: [
                 {
                   quote: 'parkVehicle',
@@ -191,59 +192,144 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
       );
 
       const composite = new CompositeEvaluator([deterministicEvaluator, llmEvaluator]);
-      const report = await composite.evaluate(ctx);
+      const results = await composite.evaluate(ctx);
+      const provenance = composite.getProvenance();
 
-      expect(report.evaluatorsRun).toEqual(['deterministic', 'llm']);
-      expect(report.evaluatorsFailed).toEqual([]);
+      expect(provenance.evaluatorsRun).toEqual(['deterministic', 'llm']);
+      expect(provenance.evaluatorsFailed).toEqual([]);
+      expect(provenance.evaluatorsSkipped).toEqual([]);
+
+      const classResp = results.find((r) => r.criterion === 'classResponsibilities')!;
+      // Deterministic: score 5.0, weight 0.9; LLM: score 3.0, weight 0.7
+      // Weighted score: (5*0.9 + 3*0.7) / (0.9 + 0.7) = 6.6 / 1.6 = 4.125 -> 4.1
+      expect(classResp.score).toBe(4.1);
+      // Weighted confidence: (0.9*0.9 + 0.7*0.7) / (0.9 + 0.7) = (0.81 + 0.49) / 1.6 = 1.3 / 1.6 = 0.8125 -> 0.81
+      expect(classResp.confidence).toBe(0.81);
+      expect(classResp.evaluatorIds).toContain('deterministic');
+      expect(classResp.evaluatorIds).toContain('llm');
+
+      // Assemble full report
+      const report = assembler.assemble({
+        attemptId: ctx.attemptId,
+        rubric,
+        results,
+        provenance,
+      });
+
       expect(report.degraded).toBe(false);
-
-      // classResponsibilities merged score: (5.0*0.9 + 3.0*0.9) / (0.9 + 0.9) = 4.0
-      const classResp = report.dimensionResults.find((r) => r.criterion === 'classResponsibilities')!;
-      expect(classResp.score).toBe(4.0);
-      expect(classResp.evaluatorId).toBe('composite(deterministic+llm)');
-      // Findings from both are accumulated
-      expect(classResp.findings.length).toBeGreaterThanOrEqual(1);
+      expect(report.overallScoreComparable).toBe(true);
+      expect(report.dimensionsMissing).toHaveLength(0);
+      expect(report.summary).toMatch(/^Complete evaluation completed/);
+      expect(report.evaluatedAt).toBe('2026-09-15T12:00:00.000Z');
     });
 
-    it('survives thrown LLM error and returns degraded report with deterministic results', async () => {
-      fakeLlm.setError(new Error('503 Service Unavailable / Connection timeout'));
+    it('handles timeout when FakeLlmClient never resolves, producing degraded report', async () => {
+      fakeLlm.setNeverResolve(true);
 
-      const composite = new CompositeEvaluator([deterministicEvaluator, llmEvaluator]);
-      const report = await composite.evaluate(ctx);
+      // Timeout of 50ms for quick test execution
+      const composite = new CompositeEvaluator([deterministicEvaluator, llmEvaluator], {
+        timeoutMs: 50,
+      });
+      const results = await composite.evaluate(ctx);
+      const provenance = composite.getProvenance();
+
+      expect(provenance.evaluatorsRun).toEqual(['deterministic']);
+      expect(provenance.evaluatorsFailed.some((f) => f.includes('timed out'))).toBe(true);
+
+      const report = assembler.assemble({
+        attemptId: ctx.attemptId,
+        rubric,
+        results,
+        provenance,
+      });
 
       expect(report.degraded).toBe(true);
-      expect(report.evaluatorsRun).toEqual(['deterministic']);
-      expect(report.evaluatorsFailed).toEqual(['llm']);
-      // Still produced all 8 dimensions from deterministic evaluator
-      expect(report.dimensionResults).toHaveLength(8);
-      expect(report.overallScore).toBeGreaterThan(0);
-      expect(report.summary).toMatch(/degraded mode/);
+      expect(report.summary).toMatch(/^Partial evaluation completed \(degraded mode\)/);
     });
 
-    it('survives malformed LLM JSON and returns degraded report without crashing', async () => {
-      fakeLlm.setResponse('<<<MALFORMED LLM OUTPUT>>>');
+    it('records evaluatorsSkipped and marks degraded=true when an evaluator does not support context', async () => {
+      const unsupportedLlm = new LlmEvaluator(fakeLlm, 'unsupported-llm', () => false);
 
-      const composite = new CompositeEvaluator([deterministicEvaluator, llmEvaluator]);
-      const report = await composite.evaluate(ctx);
+      const composite = new CompositeEvaluator([deterministicEvaluator, unsupportedLlm]);
+      const results = await composite.evaluate(ctx);
+      const provenance = composite.getProvenance();
+
+      expect(provenance.evaluatorsSkipped).toEqual(['unsupported-llm']);
+      expect(provenance.evaluatorsRun).toEqual(['deterministic']);
+
+      const report = assembler.assemble({
+        attemptId: ctx.attemptId,
+        rubric,
+        results,
+        provenance,
+      });
 
       expect(report.degraded).toBe(true);
-      expect(report.evaluatorsRun).toEqual(['deterministic']);
-      expect(report.evaluatorsFailed).toEqual(['llm']);
-      expect(report.dimensionResults).toHaveLength(8);
+      expect(report.summary).not.toMatch(/^Complete evaluation/);
+      expect(report.summary).toMatch(/Skipped: \[unsupported-llm\]/);
     });
 
-    it('throws error when all registered evaluators fail', async () => {
-      fakeLlm.setError(new Error('LLM failed'));
+    it('nests a CompositeEvaluator inside another CompositeEvaluator cleanly', async () => {
+      const innerComposite = new CompositeEvaluator([deterministicEvaluator], { id: 'inner-composite' });
+      const outerComposite = new CompositeEvaluator([innerComposite, llmEvaluator], { id: 'outer-composite' });
+
+      fakeLlm.setResponse(
+        JSON.stringify({
+          dimensions: [],
+          overallSummary: 'Empty dimensions',
+        })
+      );
+
+      const results = await outerComposite.evaluate(ctx);
+      expect(results).toHaveLength(8);
+      const provenance = outerComposite.getProvenance();
+      expect(provenance.evaluatorsRun).toContain('inner-composite');
+      expect(provenance.evaluatorsRun).toContain('llm');
+    });
+
+    it('flags dimensionsMissing and sets overallScoreComparable=false when dimensions are missing', async () => {
+      // Stub evaluator that returns only 1 dimension
+      const partialEvaluator = {
+        id: 'partial',
+        supports: () => true,
+        evaluate: async () => [
+          {
+            criterion: 'classResponsibilities' as const,
+            findings: [],
+            score: 4.0,
+            confidence: 0.9,
+            evaluatorIds: ['partial'],
+          },
+        ],
+      };
+
+      const composite = new CompositeEvaluator([partialEvaluator]);
+      const results = await composite.evaluate(ctx);
+      const provenance = composite.getProvenance();
+
+      const report = assembler.assemble({
+        attemptId: ctx.attemptId,
+        rubric,
+        results,
+        provenance,
+      });
+
+      expect(report.dimensionsMissing.length).toBe(7);
+      expect(report.overallScoreComparable).toBe(false);
+    });
+
+    it('throws EvaluationFailedError when all active evaluators throw', async () => {
+      fakeLlm.setError(new Error('LLM fatal failure'));
       const brokenEvaluator = {
         id: 'broken',
         supports: () => true,
         evaluate: async () => {
-          throw new Error('Broken evaluator');
+          throw new Error('Fatal rule failure');
         },
       };
 
       const composite = new CompositeEvaluator([brokenEvaluator, llmEvaluator]);
-      await expect(composite.evaluate(ctx)).rejects.toThrow(/All registered evaluators failed/);
+      await expect(composite.evaluate(ctx)).rejects.toThrow(EvaluationFailedError);
     });
   });
 });

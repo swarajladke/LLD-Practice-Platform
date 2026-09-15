@@ -4,20 +4,28 @@ export class FakeLlmClient implements LlmClient {
   private responseGenerator?: (prompt: string) => string;
   private fixedResponse?: string;
   private errorToThrow?: Error;
+  private neverResolve: boolean = false;
   private readonly callHistory: Array<{ prompt: string; options?: LlmGenerationOptions }> = [];
 
   setResponse(response: string): void {
     this.fixedResponse = response;
     this.errorToThrow = undefined;
+    this.neverResolve = false;
   }
 
   setResponseGenerator(fn: (prompt: string) => string): void {
     this.responseGenerator = fn;
     this.errorToThrow = undefined;
+    this.neverResolve = false;
   }
 
   setError(error: Error): void {
     this.errorToThrow = error;
+    this.neverResolve = false;
+  }
+
+  setNeverResolve(never: boolean): void {
+    this.neverResolve = never;
   }
 
   getCalls() {
@@ -29,10 +37,15 @@ export class FakeLlmClient implements LlmClient {
     this.fixedResponse = undefined;
     this.responseGenerator = undefined;
     this.errorToThrow = undefined;
+    this.neverResolve = false;
   }
 
   async generateText(prompt: string, options?: LlmGenerationOptions): Promise<string> {
     this.callHistory.push({ prompt, options });
+
+    if (this.neverResolve) {
+      return new Promise<string>(() => {});
+    }
 
     if (this.errorToThrow) {
       throw this.errorToThrow;
@@ -46,7 +59,6 @@ export class FakeLlmClient implements LlmClient {
       return this.fixedResponse;
     }
 
-    // Default valid structured fallback response
     return JSON.stringify({
       dimensions: [
         {

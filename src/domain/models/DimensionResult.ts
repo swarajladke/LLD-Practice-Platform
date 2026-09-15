@@ -3,23 +3,26 @@ import type { RubricDimension } from './Rubric.js';
 
 /**
  * A concrete evaluation finding grounded by evidence or documented absence.
+ * Includes evaluatorId so the UI and learner can distinguish rule-based vs AI findings.
  */
 export interface Finding {
   readonly evidenceRef: EvidenceRef;
   readonly concern: string;
   readonly suggestion: string;
+  readonly evaluatorId: string;
 }
 
 /**
  * Result for a single evaluated dimension.
  * Aggregates all detected findings rather than halting at the first violation.
+ * Tracks all evaluators that contributed to this dimension.
  */
 export interface DimensionResult {
   readonly criterion: RubricDimension;
   readonly findings: readonly Finding[];
   readonly score: number; // 0 to 5
   readonly confidence: number; // 0 to 1
-  readonly evaluatorId: string; // Evaluator that generated this result
+  readonly evaluatorIds: readonly string[]; // All evaluators that contributed to this dimension
 }
 
 /**

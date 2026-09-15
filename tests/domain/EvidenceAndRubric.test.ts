@@ -40,6 +40,7 @@ describe('Evidence & EvidenceRef', () => {
       evidenceRef: absenceRef('entities', 'Missing'),
       concern: 'C',
       suggestion: 'S',
+      evaluatorId: 'test',
     };
     expect(deriveScoreFromFindings([mockFinding])).toBe(3.5);
     expect(deriveScoreFromFindings([mockFinding, mockFinding])).toBe(2.0);

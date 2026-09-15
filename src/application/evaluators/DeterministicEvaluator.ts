@@ -10,12 +10,6 @@ import type { Rubric } from '../../domain/models/Rubric.js';
 
 /**
  * Normalizes text tokens by lowercasing and stripping common plural suffixes ('s', 'es').
- *
- * Limitation / False Positive note for docs/DESIGN.md:
- * Tokenization and simple stemming can produce false positives (e.g. "spotlight" matching "spot")
- * or false negatives when synonyms are employed (e.g. "Space" instead of "Spot").
- * The deterministic evaluator acts as a high-precision, low-latency syntactic filter;
- * deeper semantic nuances are evaluated by the complementary LLM evaluator.
  */
 function tokenizeAndNormalize(text: string): Set<string> {
   const words = text.toLowerCase().split(/[^a-z0-9]+/);
@@ -35,7 +29,7 @@ function tokenizeAndNormalize(text: string): Set<string> {
 /**
  * Deterministic rule-based evaluation engine.
  * Inspects canonical DesignSpec, collecting ALL findings per dimension.
- * Every finding is honestly grounded by a quote or documented absence.
+ * Every finding is honestly grounded by a quote or documented absence and stamped with evaluatorId.
  */
 export class DeterministicEvaluator implements Evaluator {
   readonly id = 'deterministic';
@@ -61,12 +55,10 @@ export class DeterministicEvaluator implements Evaluator {
 
   /**
    * 1. Requirement Understanding: Concept coverage and minimum entity count.
-   * Note: Tradeoff count is evaluated exclusively in evaluateExplanationQuality.
    */
   private evaluateRequirementUnderstanding(spec: DesignSpec, rubric: Rubric): DimensionResult {
     const findings: Finding[] = [];
 
-    // Check minimum entity count
     if (spec.entities.length < rubric.minEntities) {
       findings.push({
         evidenceRef: absenceRef(
@@ -75,10 +67,10 @@ export class DeterministicEvaluator implements Evaluator {
         ),
         concern: `Submission defines ${spec.entities.length} entities, but problem rubric requires at least ${rubric.minEntities}.`,
         suggestion: `Expand the domain model to model the core components of the problem.`,
+        evaluatorId: this.id,
       });
     }
 
-    // Comprehensive corpus including entities, interfaces, tradeoffs, and extensibility
     const corpusParts = [
       ...spec.assumptions,
       ...spec.entities.flatMap((e) => [e.name, e.responsibility, ...e.methods, ...e.attributes]),
@@ -103,6 +95,7 @@ export class DeterministicEvaluator implements Evaluator {
           evidenceRef: absenceRef('expectedConcepts', `Expected concept '${concept}' not found in submission`),
           concern: `Missing core domain concept expected by problem: '${concept}'.`,
           suggestion: `Incorporate '${concept}' into entity responsibilities, interfaces, or attributes.`,
+          evaluatorId: this.id,
         });
       }
     }
@@ -112,13 +105,12 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 1.5),
       confidence: 0.95,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 
   /**
    * 2. Class Responsibilities: God-class method count and conflated responsibilities.
-   * Collects ALL violating entities instead of returning on the first.
    */
   private evaluateClassResponsibilities(spec: DesignSpec, rubric: Rubric): DimensionResult {
     const findings: Finding[] = [];
@@ -128,20 +120,20 @@ export class DeterministicEvaluator implements Evaluator {
         evidenceRef: absenceRef('entities', 'No entities provided in design specification'),
         concern: 'No entities provided to evaluate responsibilities.',
         suggestion: 'Define domain entities with distinct single responsibilities.',
+        evaluatorId: this.id,
       });
       return {
         criterion: 'classResponsibilities',
         findings,
         score: 0,
         confidence: 1.0,
-        evaluatorId: this.id,
+        evaluatorIds: [this.id],
       };
     }
 
     for (let i = 0; i < spec.entities.length; i++) {
       const entity = spec.entities[i];
 
-      // Heuristic A: Method count exceeding threshold
       if (entity.methods.length > rubric.godClassMethodThreshold) {
         findings.push({
           evidenceRef: quoteRef(
@@ -150,10 +142,10 @@ export class DeterministicEvaluator implements Evaluator {
           ),
           concern: `God-class detected: '${entity.name}' declares ${entity.methods.length} methods (threshold: ${rubric.godClassMethodThreshold}).`,
           suggestion: `Decompose '${entity.name}' into smaller, cohesive classes following SRP.`,
+          evaluatorId: this.id,
         });
       }
 
-      // Heuristic B: Responsibility string joining distinct duties with 'and'
       const resp = entity.responsibility.toLowerCase();
       const hasConjunction = /\b(and|as well as|along with)\b/.test(resp);
       const actionWordsCount = (
@@ -165,6 +157,7 @@ export class DeterministicEvaluator implements Evaluator {
           evidenceRef: quoteRef(entity.responsibility, `entities[${i}].responsibility`),
           concern: `Multiple responsibilities conflated in '${entity.name}': "${entity.responsibility}".`,
           suggestion: `Split '${entity.name}' so each class has exactly one reason to change.`,
+          evaluatorId: this.id,
         });
       }
     }
@@ -174,7 +167,7 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 1.5),
       confidence: 0.9,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 
@@ -189,13 +182,14 @@ export class DeterministicEvaluator implements Evaluator {
         evidenceRef: absenceRef('entities', 'No entities provided in submission'),
         concern: 'No entities or relationships specified.',
         suggestion: 'Specify entities and relationships.',
+        evaluatorId: this.id,
       });
       return {
         criterion: 'couplingCohesion',
         findings,
         score: 0,
         confidence: 1.0,
-        evaluatorId: this.id,
+        evaluatorIds: [this.id],
       };
     }
 
@@ -204,6 +198,7 @@ export class DeterministicEvaluator implements Evaluator {
         evidenceRef: absenceRef('relationships', 'No relationships defined between entities'),
         concern: 'No relationships defined between domain entities.',
         suggestion: 'Model has-a, is-a, or uses relationships between your entities.',
+        evaluatorId: this.id,
       });
     }
 
@@ -220,6 +215,7 @@ export class DeterministicEvaluator implements Evaluator {
           evidenceRef: quoteRef(entity.name, `entities[${i}].name`),
           concern: `Orphan entity detected: '${entity.name}' has no relationships to other entities.`,
           suggestion: `Connect '${entity.name}' to the domain model via composition (has-a) or dependency (uses).`,
+          evaluatorId: this.id,
         });
       }
     }
@@ -229,12 +225,12 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 1.5),
       confidence: 0.95,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 
   /**
-   * 4. Encapsulation & Interfaces: Identifies ALL anemic entities (state without behavior).
+   * 4. Encapsulation & Interfaces: Identifies ALL anemic entities.
    */
   private evaluateEncapsulationInterfaces(spec: DesignSpec): DimensionResult {
     const findings: Finding[] = [];
@@ -244,13 +240,14 @@ export class DeterministicEvaluator implements Evaluator {
         evidenceRef: absenceRef('entities', 'No entities declared to evaluate encapsulation'),
         concern: 'No entities provided to evaluate encapsulation.',
         suggestion: 'Define domain entities with both state and behavior.',
+        evaluatorId: this.id,
       });
       return {
         criterion: 'encapsulationInterfaces',
         findings,
         score: 0,
         confidence: 1.0,
-        evaluatorId: this.id,
+        evaluatorIds: [this.id],
       };
     }
 
@@ -264,6 +261,7 @@ export class DeterministicEvaluator implements Evaluator {
           ),
           concern: `Anemic entity detected: '${entity.name}' holds state attributes but no methods.`,
           suggestion: `Encapsulate operations that mutate or calculate over '${entity.name}' state inside the entity.`,
+          evaluatorId: this.id,
         });
       }
     }
@@ -273,7 +271,7 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 1.5),
       confidence: 0.95,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 
@@ -306,6 +304,7 @@ export class DeterministicEvaluator implements Evaluator {
           ),
           concern: `Missing abstraction for declared extension axis: '${axis}'.`,
           suggestion: `Introduce a Strategy or Factory interface representing the '${axis}' abstraction.`,
+          evaluatorId: this.id,
         });
       }
     }
@@ -315,7 +314,7 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 2.0),
       confidence: 0.95,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 
@@ -331,12 +330,14 @@ export class DeterministicEvaluator implements Evaluator {
         evidenceRef: absenceRef('extensibility', 'Extensibility explanation is missing'),
         concern: 'Extensibility explanation is missing.',
         suggestion: 'Describe how your design absorbs future requirements without modifying existing classes (OCP).',
+        evaluatorId: this.id,
       });
     } else if (trimmed.length < rubric.minExtensibilityLength) {
       findings.push({
         evidenceRef: quoteRef(trimmed, 'extensibility'),
         concern: `Extensibility rationale is too brief (${trimmed.length} chars, threshold: ${rubric.minExtensibilityLength}).`,
         suggestion: 'Provide a detailed explanation of how extension axes are supported.',
+        evaluatorId: this.id,
       });
     }
 
@@ -345,7 +346,7 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 2.0),
       confidence: 0.9,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 
@@ -360,6 +361,7 @@ export class DeterministicEvaluator implements Evaluator {
         evidenceRef: absenceRef('assumptions', 'No assumptions or boundary constraints specified'),
         concern: 'No assumptions or boundary conditions specified.',
         suggestion: 'State key assumptions (e.g. concurrency limits, network failure, capacity constraints).',
+        evaluatorId: this.id,
       });
     }
 
@@ -368,7 +370,7 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 2.0),
       confidence: 0.85,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 
@@ -386,6 +388,7 @@ export class DeterministicEvaluator implements Evaluator {
         ),
         concern: `Rubric requires at least ${rubric.minTradeoffs} tradeoffs, but found ${spec.tradeoffs.length}.`,
         suggestion: 'Document architectural tradeoffs: decision, alternative considered, and engineering rationale.',
+        evaluatorId: this.id,
       });
     }
 
@@ -396,6 +399,7 @@ export class DeterministicEvaluator implements Evaluator {
           evidenceRef: quoteRef(t.why, `tradeoffs[${i}].why`),
           concern: `Tradeoff rationale for '${t.decision}' is shallow (${t.why.trim().length} chars, threshold: ${rubric.minRationaleLength}).`,
           suggestion: 'Articulate the technical costs and benefits that guided your decision.',
+          evaluatorId: this.id,
         });
       }
     }
@@ -405,7 +409,7 @@ export class DeterministicEvaluator implements Evaluator {
       findings,
       score: deriveScoreFromFindings(findings, 1.5),
       confidence: 0.95,
-      evaluatorId: this.id,
+      evaluatorIds: [this.id],
     };
   }
 }

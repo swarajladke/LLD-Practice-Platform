@@ -159,6 +159,9 @@ export class SqliteAttemptRepository implements AttemptRepository {
         rubricVersion: parsedReport.rubricVersion,
         evaluatorsRun: parsedReport.evaluatorsRun ?? [],
         evaluatorsFailed: parsedReport.evaluatorsFailed ?? [],
+        evaluatorsSkipped: parsedReport.evaluatorsSkipped ?? [],
+        dimensionsMissing: parsedReport.dimensionsMissing ?? [],
+        overallScoreComparable: parsedReport.overallScoreComparable ?? true,
         overallScore: parsedReport.overallScore,
         summary: parsedReport.summary,
         degraded: Boolean(parsedReport.degraded),
@@ -169,26 +172,32 @@ export class SqliteAttemptRepository implements AttemptRepository {
             evidenceRef: EvidenceRef;
             concern: string;
             suggestion: string;
+            evaluatorId: string;
           }>;
           score: number;
           confidence: number;
-          evaluatorId: string;
+          evaluatorIds?: string[];
+          evaluatorId?: string;
         }) => ({
           criterion: dr.criterion,
           score: dr.score,
           confidence: dr.confidence,
-          evaluatorId: dr.evaluatorId,
+          evaluatorIds: dr.evaluatorIds ?? (dr.evaluatorId ? [dr.evaluatorId] : []),
           findings: (dr.findings ?? []).map((f): Finding => {
             if (f.evidenceRef && f.evidenceRef.kind === 'quote') {
               return {
                 ...f,
+                evaluatorId: f.evaluatorId ?? 'unknown',
                 evidenceRef: quoteRef(
                   f.evidenceRef.evidence.quote,
                   f.evidenceRef.evidence.sourcePath
                 ),
               };
             }
-            return f;
+            return {
+              ...f,
+              evaluatorId: f.evaluatorId ?? 'unknown',
+            };
           }),
         })),
       };

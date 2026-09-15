@@ -35,6 +35,9 @@ const sampleReport: EvaluationReport = {
   rubricVersion: '1.0.0',
   evaluatorsRun: ['deterministic'],
   evaluatorsFailed: [],
+  evaluatorsSkipped: [],
+  dimensionsMissing: [],
+  overallScoreComparable: true,
   dimensionResults: [
     {
       criterion: 'classResponsibilities',
@@ -44,10 +47,11 @@ const sampleReport: EvaluationReport = {
           evidenceRef: quoteRef('Coordinates spot allocation', 'entities[0].responsibility'),
           concern: 'Slight coupling with allocation strategy.',
           suggestion: 'Separate spot allocation strategy from lot management.',
+          evaluatorId: 'deterministic',
         },
       ],
       confidence: 0.9,
-      evaluatorId: 'deterministic',
+      evaluatorIds: ['deterministic'],
     },
   ],
   overallScore: 4.0,

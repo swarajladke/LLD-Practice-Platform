@@ -21,3 +21,10 @@ export class CorruptAttemptStateError extends Error {
     this.name = 'CorruptAttemptStateError';
   }
 }
+
+export class EvaluationFailedError extends Error {
+  constructor(reason: string) {
+    super(`Evaluation failed: ${reason}`);
+    this.name = 'EvaluationFailedError';
+  }
+}

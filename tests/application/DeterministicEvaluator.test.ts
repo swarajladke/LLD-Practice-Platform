@@ -106,7 +106,7 @@ describe('DeterministicEvaluator Heuristics & Multi-Finding Collection', () => {
     for (const res of results) {
       expect(res.score).toBe(5);
       expect(res.findings).toHaveLength(0);
-      expect(res.evaluatorId).toBe('deterministic');
+      expect(res.evaluatorIds).toContain('deterministic');
     }
   });
 
