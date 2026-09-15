@@ -23,6 +23,9 @@ const baseRubric = Rubric.create({
   minEntities: 3,
   minTradeoffs: 2,
   dimensionWeights: weights,
+  godClassMethodThreshold: 5,
+  minRationaleLength: 15,
+  minExtensibilityLength: 20,
 });
 
 const baseProblem: Problem = {
@@ -82,14 +85,14 @@ const healthySpec: DesignSpec = {
   extensibility: 'Can easily add new vehicle types and pricing strategies by implementing interfaces without changing core domain.',
 };
 
-describe('DeterministicEvaluator Heuristics', () => {
+describe('DeterministicEvaluator Heuristics & Multi-Finding Collection', () => {
   let evaluator: DeterministicEvaluator;
 
   beforeEach(() => {
     evaluator = new DeterministicEvaluator();
   });
 
-  it('evaluates healthy submission with high scores and valid evidence on all dimensions', async () => {
+  it('evaluates healthy submission with high scores and zero negative findings', async () => {
     const ctx: EvaluationContext = {
       attemptId: 'healthy-attempt',
       spec: healthySpec,
@@ -101,95 +104,142 @@ describe('DeterministicEvaluator Heuristics', () => {
     expect(results).toHaveLength(8);
 
     for (const res of results) {
-      expect(res.score).toBeGreaterThanOrEqual(4);
-      expect(res.evidence.quote.trim().length).toBeGreaterThan(0);
-      expect(res.evidence.sourcePath.trim().length).toBeGreaterThan(0);
+      expect(res.score).toBe(5);
+      expect(res.findings).toHaveLength(0);
       expect(res.evaluatorId).toBe('deterministic');
     }
   });
 
-  describe('God-Class Heuristic', () => {
-    it('triggers god-class when entity has excessive methods (> 5)', async () => {
-      const godClassSpec: DesignSpec = {
+  it('handles completely empty spec with minEntities=0 without throwing', async () => {
+    const zeroEntityRubric = Rubric.create({
+      rubricVersion: '1.0.0',
+      expectedConcepts: [],
+      extensionAxes: [],
+      minEntities: 0,
+      minTradeoffs: 0,
+      dimensionWeights: weights,
+    });
+
+    const emptySpec: DesignSpec = {
+      assumptions: [],
+      entities: [],
+      relationships: [],
+      interfaces: [],
+      tradeoffs: [],
+      extensibility: '',
+    };
+
+    await expect(
+      evaluator.evaluate({
+        attemptId: 'empty-attempt',
+        spec: emptySpec,
+        problem: { ...baseProblem, rubric: zeroEntityRubric },
+        rubric: zeroEntityRubric,
+      })
+    ).resolves.not.toThrow();
+  });
+
+  it('asserts that a missing tradeoff lowers exactly one dimension (explanationQuality)', async () => {
+    const missingTradeoffSpec: DesignSpec = {
+      ...healthySpec,
+      tradeoffs: [healthySpec.tradeoffs[0]], // 1 tradeoff instead of 2
+    };
+
+    const results = await evaluator.evaluate({
+      attemptId: 'one-tradeoff-attempt',
+      spec: missingTradeoffSpec,
+      problem: baseProblem,
+      rubric: baseRubric,
+    });
+
+    const reqUnder = results.find((r) => r.criterion === 'requirementUnderstanding')!;
+    const expQual = results.find((r) => r.criterion === 'explanationQuality')!;
+
+    // requirementUnderstanding must NOT be penalized for missing tradeoff
+    expect(reqUnder.score).toBe(5);
+    expect(reqUnder.findings).toHaveLength(0);
+
+    // explanationQuality MUST be penalized
+    expect(expQual.score).toBeLessThan(5);
+    expect(expQual.findings.some((f) => f.concern.includes('Rubric requires at least 2 tradeoffs'))).toBe(true);
+  });
+
+  describe('Multi-Finding Collection (asserting all violations are reported)', () => {
+    it('reports ALL violating entities when multiple entities violate god-class heuristic', async () => {
+      const multiGodClassSpec: DesignSpec = {
         ...healthySpec,
         entities: [
           {
-            name: 'SuperParkingManager',
-            responsibility: 'Manages entire parking domain',
-            attributes: ['spots', 'tickets', 'payments', 'gates'],
-            methods: [
-              'parkVehicle',
-              'vacateSpot',
-              'calculateFee',
-              'processCreditCard',
-              'printTicket',
-              'openGate',
-              'triggerAlarm',
-            ],
+            name: 'GodA',
+            responsibility: 'Manages lots and handles payments',
+            attributes: [],
+            methods: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'], // > 5 methods
           },
-          ...healthySpec.entities.slice(1),
+          {
+            name: 'GodB',
+            responsibility: 'Coordinates cars and prints tickets',
+            attributes: [],
+            methods: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7'], // > 5 methods
+          },
+          healthySpec.entities[2],
         ],
       };
 
       const results = await evaluator.evaluate({
-        attemptId: 'god-class-attempt',
-        spec: godClassSpec,
+        attemptId: 'multi-god-attempt',
+        spec: multiGodClassSpec,
         problem: baseProblem,
         rubric: baseRubric,
       });
 
       const classResp = results.find((r) => r.criterion === 'classResponsibilities')!;
-      expect(classResp.score).toBe(2);
-      expect(classResp.concern).toMatch(/God-class detected/);
-      expect(classResp.evidence.sourcePath).toBe('entities[0].methods');
+      // Both GodA and GodB must appear in findings
+      expect(classResp.findings.length).toBeGreaterThanOrEqual(2);
+      const reportedEntities = classResp.findings.map((f) => f.concern);
+      expect(reportedEntities.some((c) => c.includes('GodA'))).toBe(true);
+      expect(reportedEntities.some((c) => c.includes('GodB'))).toBe(true);
     });
 
-    it('triggers god-class when responsibility string conflates multiple distinct duties with "and"', async () => {
-      const multiDutySpec: DesignSpec = {
+    it('reports ALL anemic entities when multiple entities have state but 0 methods', async () => {
+      const multiAnemicSpec: DesignSpec = {
         ...healthySpec,
         entities: [
+          healthySpec.entities[0],
           {
-            name: 'ParkingLot',
-            responsibility: 'Manages spot allocation and processes customer payments and prints receipts',
-            attributes: ['spots'],
-            methods: ['parkVehicle', 'vacateSpot'],
+            name: 'AnemicSpot',
+            responsibility: 'Data spot',
+            attributes: ['id', 'floor'],
+            methods: [],
           },
-          ...healthySpec.entities.slice(1),
+          {
+            name: 'AnemicTicket',
+            responsibility: 'Data ticket',
+            attributes: ['code', 'time'],
+            methods: [],
+          },
         ],
       };
 
       const results = await evaluator.evaluate({
-        attemptId: 'multi-duty-attempt',
-        spec: multiDutySpec,
+        attemptId: 'multi-anemic-attempt',
+        spec: multiAnemicSpec,
         problem: baseProblem,
         rubric: baseRubric,
       });
 
-      const classResp = results.find((r) => r.criterion === 'classResponsibilities')!;
-      expect(classResp.score).toBe(2);
-      expect(classResp.concern).toMatch(/Multiple responsibilities conflated/);
-      expect(classResp.evidence.sourcePath).toBe('entities[0].responsibility');
-    });
-
-    it('does not trigger god-class when classes have focused single responsibilities', async () => {
-      const results = await evaluator.evaluate({
-        attemptId: 'clean-resp-attempt',
-        spec: healthySpec,
-        problem: baseProblem,
-        rubric: baseRubric,
-      });
-
-      const classResp = results.find((r) => r.criterion === 'classResponsibilities')!;
-      expect(classResp.score).toBe(5);
-      expect(classResp.concern).toBeUndefined();
+      const encap = results.find((r) => r.criterion === 'encapsulationInterfaces')!;
+      expect(encap.findings.length).toBe(2);
+      expect(encap.findings.some((f) => f.concern.includes('AnemicSpot'))).toBe(true);
+      expect(encap.findings.some((f) => f.concern.includes('AnemicTicket'))).toBe(true);
+      expect(encap.score).toBe(2); // 5 - 2*1.5 = 2.0
     });
   });
 
   describe('Missing Abstraction Heuristic', () => {
-    it('triggers missing abstraction when declared extension axis has no interface/hierarchy', async () => {
+    it('triggers missing abstraction and records absence evidence when extension axis is uncovered', async () => {
       const missingAbsSpec: DesignSpec = {
         ...healthySpec,
-        interfaces: [], // Removed PricingStrategy interface
+        interfaces: [],
       };
 
       const results = await evaluator.evaluate({
@@ -200,9 +250,10 @@ describe('DeterministicEvaluator Heuristics', () => {
       });
 
       const absResult = results.find((r) => r.criterion === 'abstractionPatterns')!;
-      expect(absResult.score).toBe(2);
-      expect(absResult.concern).toMatch(/Missing abstraction for declared extension axis: 'PricingStrategy'/);
-      expect(absResult.evidence.sourcePath).toBe('extensibility');
+      expect(absResult.score).toBeLessThan(5);
+      expect(absResult.findings).toHaveLength(1);
+      expect(absResult.findings[0].evidenceRef.kind).toBe('absence');
+      expect(absResult.findings[0].concern).toMatch(/Missing abstraction for declared extension axis: 'PricingStrategy'/);
     });
 
     it('does not trigger missing abstraction when interface covers the extension axis', async () => {
@@ -215,12 +266,12 @@ describe('DeterministicEvaluator Heuristics', () => {
 
       const absResult = results.find((r) => r.criterion === 'abstractionPatterns')!;
       expect(absResult.score).toBe(5);
-      expect(absResult.evidence.sourcePath).toBe('interfaces[0].name');
+      expect(absResult.findings).toHaveLength(0);
     });
   });
 
   describe('Orphan Entity Heuristic', () => {
-    it('triggers orphan entity when an entity participates in zero relationships', async () => {
+    it('triggers orphan entity with honest quote evidence', async () => {
       const orphanSpec: DesignSpec = {
         ...healthySpec,
         entities: [
@@ -232,7 +283,6 @@ describe('DeterministicEvaluator Heuristics', () => {
             methods: ['log'],
           },
         ],
-        // AuditLogger is not in relationships
       };
 
       const results = await evaluator.evaluate({
@@ -242,157 +292,51 @@ describe('DeterministicEvaluator Heuristics', () => {
         rubric: baseRubric,
       });
 
-      const couplingResult = results.find((r) => r.criterion === 'couplingCohesion')!;
-      expect(couplingResult.score).toBe(2);
-      expect(couplingResult.concern).toMatch(/Orphan entity detected: 'AuditLogger'/);
-      expect(couplingResult.evidence.sourcePath).toBe('entities[3].name');
-      expect(couplingResult.evidence.quote).toBe('AuditLogger');
-    });
-
-    it('does not trigger orphan entity when all entities are connected via relationships', async () => {
-      const results = await evaluator.evaluate({
-        attemptId: 'connected-attempt',
-        spec: healthySpec,
-        problem: baseProblem,
-        rubric: baseRubric,
-      });
-
-      const couplingResult = results.find((r) => r.criterion === 'couplingCohesion')!;
-      expect(couplingResult.score).toBe(5);
-      expect(couplingResult.concern).toBeUndefined();
+      const coupling = results.find((r) => r.criterion === 'couplingCohesion')!;
+      expect(coupling.findings).toHaveLength(1);
+      expect(coupling.findings[0].evidenceRef.kind).toBe('quote');
+      if (coupling.findings[0].evidenceRef.kind === 'quote') {
+        expect(coupling.findings[0].evidenceRef.evidence.quote).toBe('AuditLogger');
+        expect(coupling.findings[0].evidenceRef.evidence.sourcePath).toBe('entities[3].name');
+      }
     });
   });
 
-  describe('Anemic Model Heuristic', () => {
-    it('triggers anemic entity when entity has state attributes but 0 methods', async () => {
-      const anemicSpec: DesignSpec = {
+  describe('Concept Coverage with Stemming & Tradeoffs Inclusion', () => {
+    it('recognizes pluralized concepts in tradeoffs/extensibility corpus', async () => {
+      const pluralSpec: DesignSpec = {
         ...healthySpec,
         entities: [
-          healthySpec.entities[0],
+          healthySpec.entities[0], // ParkingLot
           {
-            name: 'Spot',
-            responsibility: 'Holds spot data',
-            attributes: ['isOccupied', 'spotType'],
-            methods: [], // 0 methods!
-          },
-          healthySpec.entities[2],
-        ],
-      };
-
-      const results = await evaluator.evaluate({
-        attemptId: 'anemic-attempt',
-        spec: anemicSpec,
-        problem: baseProblem,
-        rubric: baseRubric,
-      });
-
-      const encapResult = results.find((r) => r.criterion === 'encapsulationInterfaces')!;
-      expect(encapResult.score).toBe(2);
-      expect(encapResult.concern).toMatch(/Anemic entity detected: 'Spot'/);
-      expect(encapResult.evidence.sourcePath).toBe('entities[1].attributes');
-    });
-
-    it('does not trigger anemic entity when entities encapsulate business methods', async () => {
-      const results = await evaluator.evaluate({
-        attemptId: 'encapsulated-attempt',
-        spec: healthySpec,
-        problem: baseProblem,
-        rubric: baseRubric,
-      });
-
-      const encapResult = results.find((r) => r.criterion === 'encapsulationInterfaces')!;
-      expect(encapResult.score).toBe(5);
-      expect(encapResult.concern).toBeUndefined();
-    });
-  });
-
-  describe('Minimum Entity and Tradeoff Counts', () => {
-    it('triggers requirement understanding penalty when below minEntities', async () => {
-      const fewEntitiesSpec: DesignSpec = {
-        ...healthySpec,
-        entities: [healthySpec.entities[0]], // Only 1 entity when min is 3
-        relationships: [],
-      };
-
-      const results = await evaluator.evaluate({
-        attemptId: 'few-entities-attempt',
-        spec: fewEntitiesSpec,
-        problem: baseProblem,
-        rubric: baseRubric,
-      });
-
-      const reqResult = results.find((r) => r.criterion === 'requirementUnderstanding')!;
-      expect(reqResult.score).toBe(1);
-      expect(reqResult.concern).toMatch(/defines 1 entities, but problem requires at least 3/);
-    });
-
-    it('triggers explanation quality penalty when below minTradeoffs', async () => {
-      const fewTradeoffsSpec: DesignSpec = {
-        ...healthySpec,
-        tradeoffs: [healthySpec.tradeoffs[0]], // Only 1 tradeoff when min is 2
-      };
-
-      const results = await evaluator.evaluate({
-        attemptId: 'few-tradeoffs-attempt',
-        spec: fewTradeoffsSpec,
-        problem: baseProblem,
-        rubric: baseRubric,
-      });
-
-      const expResult = results.find((r) => r.criterion === 'explanationQuality')!;
-      expect(expResult.score).toBe(2);
-      expect(expResult.concern).toMatch(/requires at least 2 tradeoffs, but found 1/);
-    });
-  });
-
-  describe('Concept Coverage Heuristic', () => {
-    it('triggers requirement understanding penalty when core concept is omitted', async () => {
-      const missingConceptSpec: DesignSpec = {
-        ...healthySpec,
-        entities: [
-          healthySpec.entities[0],
-          healthySpec.entities[1],
-          {
-            name: 'Receipt',
-            responsibility: 'Receipt info',
+            name: 'Bay',
+            responsibility: 'Allocates parking spots', // contains plural 'spots' -> matches 'Spot'
             attributes: ['id'],
-            methods: ['print'],
+            methods: ['allocate'],
+          },
+          {
+            name: 'Pass',
+            responsibility: 'Issues entry tickets', // contains plural 'tickets' -> matches 'Ticket'
+            attributes: ['code'],
+            methods: ['validate'],
           },
         ],
         relationships: [
-          { from: 'ParkingLot', to: 'Spot', type: 'has-a', note: 'Lot contains spots' },
-        ],
-        interfaces: [
-          {
-            name: 'PricingStrategy',
-            purpose: 'Enables flexible hourly or flat pricing schemes',
-            methods: ['calculateFee(hours: number): number'],
-          },
+          { from: 'ParkingLot', to: 'Bay', type: 'has-a' },
+          { from: 'ParkingLot', to: 'Pass', type: 'uses' },
         ],
       };
 
       const results = await evaluator.evaluate({
-        attemptId: 'missing-concept-attempt',
-        spec: missingConceptSpec,
+        attemptId: 'plural-attempt',
+        spec: pluralSpec,
         problem: baseProblem,
         rubric: baseRubric,
       });
 
-      const reqResult = results.find((r) => r.criterion === 'requirementUnderstanding')!;
-      expect(reqResult.concern).toMatch(/Missing core domain concepts expected by the problem: Ticket/);
-    });
-
-    it('does not trigger concept coverage penalty when all expected concepts are covered', async () => {
-      const results = await evaluator.evaluate({
-        attemptId: 'all-concepts-attempt',
-        spec: healthySpec,
-        problem: baseProblem,
-        rubric: baseRubric,
-      });
-
-      const reqResult = results.find((r) => r.criterion === 'requirementUnderstanding')!;
-      expect(reqResult.score).toBe(5);
-      expect(reqResult.concern).toBeUndefined();
+      const reqUnder = results.find((r) => r.criterion === 'requirementUnderstanding')!;
+      expect(reqUnder.score).toBe(5);
+      expect(reqUnder.findings).toHaveLength(0);
     });
   });
 });

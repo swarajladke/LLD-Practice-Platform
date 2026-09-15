@@ -22,6 +22,9 @@ export interface RubricConfig {
   readonly minEntities: number;
   readonly minTradeoffs: number;
   readonly dimensionWeights: Readonly<Record<RubricDimension, number>>;
+  readonly godClassMethodThreshold?: number;
+  readonly minRationaleLength?: number;
+  readonly minExtensibilityLength?: number;
 }
 
 export class Rubric implements RubricConfig {
@@ -31,6 +34,9 @@ export class Rubric implements RubricConfig {
   readonly minEntities: number;
   readonly minTradeoffs: number;
   readonly dimensionWeights: Readonly<Record<RubricDimension, number>>;
+  readonly godClassMethodThreshold: number;
+  readonly minRationaleLength: number;
+  readonly minExtensibilityLength: number;
 
   private constructor(config: RubricConfig) {
     this.rubricVersion = config.rubricVersion;
@@ -39,6 +45,9 @@ export class Rubric implements RubricConfig {
     this.minEntities = config.minEntities;
     this.minTradeoffs = config.minTradeoffs;
     this.dimensionWeights = Object.freeze({ ...config.dimensionWeights });
+    this.godClassMethodThreshold = config.godClassMethodThreshold ?? 7;
+    this.minRationaleLength = config.minRationaleLength ?? 15;
+    this.minExtensibilityLength = config.minExtensibilityLength ?? 20;
   }
 
   static create(config: RubricConfig): Rubric {

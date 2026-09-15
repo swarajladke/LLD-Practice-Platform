@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { Attempt } from '../../src/domain/models/Attempt.js';
 import { DuplicateIdempotencyKeyError } from '../../src/domain/errors/DomainErrors.js';
-import { Evidence } from '../../src/domain/models/Evidence.js';
+import { quoteRef } from '../../src/domain/models/Evidence.js';
 import { InMemoryAttemptRepository } from '../../src/infrastructure/repositories/InMemoryAttemptRepository.js';
 import { SqliteAttemptRepository } from '../../src/infrastructure/repositories/SqliteAttemptRepository.js';
 import type { AttemptRepository } from '../../src/domain/interfaces/AttemptRepository.js';
@@ -71,7 +71,6 @@ describe.each([
 
     await repo.save(attempt1);
 
-    // Attempting to submit a second attempt with the SAME idempotency key for Bob
     const attempt2 = Attempt.createSubmitted({
       id: 'att-11',
       problemId: 'parking-lot',
@@ -153,8 +152,13 @@ describe.each([
         {
           criterion: 'encapsulationInterfaces',
           score: 4,
-          evidence: Evidence.create('isOpen', 'entities[0].attributes[0]'),
-          suggestion: 'Encapsulate gate status behind a sensor interface',
+          findings: [
+            {
+              evidenceRef: quoteRef('isOpen', 'entities[0].attributes[0]'),
+              concern: 'Direct attribute access',
+              suggestion: 'Encapsulate gate status behind a sensor interface',
+            },
+          ],
           confidence: 0.95,
           evaluatorId: 'rule-engine',
         },
@@ -168,7 +172,11 @@ describe.each([
     expect(rehydrated?.status).toBe('EVALUATED');
     expect(rehydrated?.report?.rubricVersion).toBe('1.0.0');
     expect(rehydrated?.report?.evaluatorsRun).toEqual(['rule-engine']);
-    expect(rehydrated?.report?.dimensionResults[0].evidence.quote).toBe('isOpen');
-    expect(rehydrated?.report?.dimensionResults[0].evidence.sourcePath).toBe('entities[0].attributes[0]');
+    const finding = rehydrated?.report?.dimensionResults[0].findings[0];
+    expect(finding?.evidenceRef.kind).toBe('quote');
+    if (finding?.evidenceRef.kind === 'quote') {
+      expect(finding.evidenceRef.evidence.quote).toBe('isOpen');
+      expect(finding.evidenceRef.evidence.sourcePath).toBe('entities[0].attributes[0]');
+    }
   });
 });

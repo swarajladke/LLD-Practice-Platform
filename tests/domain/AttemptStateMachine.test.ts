@@ -4,7 +4,7 @@ import {
   CorruptAttemptStateError,
   IllegalTransitionError,
 } from '../../src/domain/errors/DomainErrors.js';
-import { Evidence } from '../../src/domain/models/Evidence.js';
+import { quoteRef } from '../../src/domain/models/Evidence.js';
 import { FixedClock } from '../../src/domain/services/Clock.js';
 import type { DesignSpec } from '../../src/domain/models/DesignSpec.js';
 import type { EvaluationReport } from '../../src/domain/models/EvaluationReport.js';
@@ -39,8 +39,13 @@ const sampleReport: EvaluationReport = {
     {
       criterion: 'classResponsibilities',
       score: 4,
-      evidence: Evidence.create('Coordinates spot allocation', 'entities[0].responsibility'),
-      suggestion: 'Separate spot allocation strategy from lot management.',
+      findings: [
+        {
+          evidenceRef: quoteRef('Coordinates spot allocation', 'entities[0].responsibility'),
+          concern: 'Slight coupling with allocation strategy.',
+          suggestion: 'Separate spot allocation strategy from lot management.',
+        },
+      ],
       confidence: 0.9,
       evaluatorId: 'deterministic',
     },
@@ -111,12 +116,10 @@ describe('Attempt State Machine & Invariants', () => {
       evaluatorsFailed: ['llm'],
     };
 
-    // Calling completeWith with a degraded report must throw
     expect(() => attempt.completeWith(degradedReport)).toThrow(
       /Cannot complete with a degraded report via completeWith/
     );
 
-    // Using degradeWith must succeed and report degraded=true
     attempt.degradeWith(degradedReport);
     expect(attempt.status).toBe('EVALUATED');
     expect(attempt.degraded).toBe(true);

@@ -1,7 +1,8 @@
 /**
- * Evidence Value Object.
- * Enforces that every dimension result grounds its score in the learner's own submission.
- * Rejects blank quotes or blank sourcePaths at construction.
+ * Evidence Value Object and Reference Types.
+ * Enforces that every evaluation finding is honestly grounded:
+ * either by a direct cited quote from the submission, or by explicit absence
+ * of an expected structure/section.
  */
 export class Evidence {
   readonly quote: string;
@@ -28,4 +29,23 @@ export class Evidence {
       sourcePath: this.sourcePath,
     };
   }
+}
+
+export type EvidenceRef =
+  | { readonly kind: 'quote'; readonly evidence: Evidence }
+  | { readonly kind: 'absence'; readonly expectedPath: string; readonly note: string };
+
+export function quoteRef(quote: string, sourcePath: string): EvidenceRef {
+  return {
+    kind: 'quote',
+    evidence: Evidence.create(quote, sourcePath),
+  };
+}
+
+export function absenceRef(expectedPath: string, note: string): EvidenceRef {
+  return {
+    kind: 'absence',
+    expectedPath,
+    note,
+  };
 }

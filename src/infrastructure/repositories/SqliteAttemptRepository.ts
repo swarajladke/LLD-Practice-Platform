@@ -6,8 +6,9 @@ import {
   type AttemptState,
   type AttemptStatus,
 } from '../../domain/models/Attempt.js';
-import { Evidence } from '../../domain/models/Evidence.js';
+import { quoteRef, type EvidenceRef } from '../../domain/models/Evidence.js';
 import type { EvaluationReport } from '../../domain/models/EvaluationReport.js';
+import type { Finding } from '../../domain/models/DimensionResult.js';
 
 interface AttemptRow {
   id: string;
@@ -164,20 +165,31 @@ export class SqliteAttemptRepository implements AttemptRepository {
         evaluatedAt: parsedReport.evaluatedAt,
         dimensionResults: (parsedReport.dimensionResults ?? []).map((dr: {
           criterion: any;
+          findings: Array<{
+            evidenceRef: EvidenceRef;
+            concern: string;
+            suggestion: string;
+          }>;
           score: number;
-          evidence: { quote: string; sourcePath: string };
-          concern?: string;
-          suggestion: string;
           confidence: number;
           evaluatorId: string;
         }) => ({
           criterion: dr.criterion,
           score: dr.score,
-          evidence: Evidence.create(dr.evidence.quote, dr.evidence.sourcePath),
-          concern: dr.concern,
-          suggestion: dr.suggestion,
           confidence: dr.confidence,
           evaluatorId: dr.evaluatorId,
+          findings: (dr.findings ?? []).map((f): Finding => {
+            if (f.evidenceRef && f.evidenceRef.kind === 'quote') {
+              return {
+                ...f,
+                evidenceRef: quoteRef(
+                  f.evidenceRef.evidence.quote,
+                  f.evidenceRef.evidence.sourcePath
+                ),
+              };
+            }
+            return f;
+          }),
         })),
       };
     }
