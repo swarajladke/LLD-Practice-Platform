@@ -2,11 +2,11 @@ import type { DimensionResult } from './DimensionResult.js';
 
 /**
  * Complete evaluation report aggregating all evaluated dimensions.
- * Emitted with the same shape whether produced purely by deterministic checks,
- * LLM judgement, or a composite merge.
+ * Stamped with rubricVersion to track which rubric generated the evaluation.
  */
 export interface EvaluationReport {
   readonly attemptId: string;
+  readonly rubricVersion: string;
   readonly dimensionResults: readonly DimensionResult[];
   readonly overallScore: number; // 0 to 5, computed from dimension weights
   readonly summary: string;

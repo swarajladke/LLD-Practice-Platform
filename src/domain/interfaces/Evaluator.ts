@@ -1,24 +1,21 @@
 import type { DesignSpec } from '../models/DesignSpec.js';
 import type { DimensionResult } from '../models/DimensionResult.js';
 import type { Problem } from '../models/Problem.js';
-import type { ProblemRubric } from '../models/Rubric.js';
+import type { Rubric } from '../models/Rubric.js';
 
 export interface EvaluationContext {
   readonly attemptId: string;
   readonly spec: DesignSpec;
   readonly problem: Problem;
-  readonly rubric: ProblemRubric;
+  readonly rubric: Rubric;
 }
 
 /**
  * Strategy interface for evaluation engines.
- * Answers Change Test B:
- * Evaluators can be deterministic rule engines, LLM evaluators, or human reviewers.
- * Any new evaluator implements this interface and is registered into CompositeEvaluator
- * without modifying existing evaluators or the practice flow.
+ * Evaluators accept the EvaluationContext to decide support and execute evaluation.
  */
 export interface Evaluator {
   readonly id: string;
-  supports(spec: DesignSpec): boolean;
+  supports(ctx: EvaluationContext): boolean;
   evaluate(ctx: EvaluationContext): Promise<readonly DimensionResult[]>;
 }
