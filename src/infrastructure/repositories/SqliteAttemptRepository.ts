@@ -153,10 +153,11 @@ export class SqliteAttemptRepository implements AttemptRepository {
 
     if (row.report) {
       const parsedReport = JSON.parse(row.report);
-      // Reconstitute Evidence instances inside dimensionResults
       report = {
         attemptId: parsedReport.attemptId,
         rubricVersion: parsedReport.rubricVersion,
+        evaluatorsRun: parsedReport.evaluatorsRun ?? [],
+        evaluatorsFailed: parsedReport.evaluatorsFailed ?? [],
         overallScore: parsedReport.overallScore,
         summary: parsedReport.summary,
         degraded: Boolean(parsedReport.degraded),
@@ -217,7 +218,6 @@ export class SqliteAttemptRepository implements AttemptRepository {
           idempotencyKey: row.idempotency_key ?? '',
           spec: spec!,
           report: report!,
-          degraded: row.degraded === 1,
         };
         break;
       case 'FAILED':

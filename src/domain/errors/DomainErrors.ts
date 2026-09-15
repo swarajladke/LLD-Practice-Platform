@@ -14,3 +14,10 @@ export class DuplicateIdempotencyKeyError extends Error {
     this.name = 'DuplicateIdempotencyKeyError';
   }
 }
+
+export class CorruptAttemptStateError extends Error {
+  constructor(attemptId: string, reason: string) {
+    super(`Corrupt attempt state for attempt '${attemptId}': ${reason}`);
+    this.name = 'CorruptAttemptStateError';
+  }
+}

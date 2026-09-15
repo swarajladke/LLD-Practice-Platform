@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { Attempt } from '../../src/domain/models/Attempt.js';
-import { IllegalTransitionError } from '../../src/domain/errors/DomainErrors.js';
+import {
+  CorruptAttemptStateError,
+  IllegalTransitionError,
+} from '../../src/domain/errors/DomainErrors.js';
 import { Evidence } from '../../src/domain/models/Evidence.js';
+import { FixedClock } from '../../src/domain/services/Clock.js';
 import type { DesignSpec } from '../../src/domain/models/DesignSpec.js';
 import type { EvaluationReport } from '../../src/domain/models/EvaluationReport.js';
 
@@ -24,9 +28,13 @@ const sampleSpec: DesignSpec = {
   extensibility: 'Can add multi-floor support by nesting floors',
 };
 
+const fixedClock = new FixedClock('2026-09-15T12:00:00.000Z');
+
 const sampleReport: EvaluationReport = {
   attemptId: 'att-1',
   rubricVersion: '1.0.0',
+  evaluatorsRun: ['deterministic'],
+  evaluatorsFailed: [],
   dimensionResults: [
     {
       criterion: 'classResponsibilities',
@@ -40,27 +48,34 @@ const sampleReport: EvaluationReport = {
   overallScore: 4.0,
   summary: 'Good separation of concerns.',
   degraded: false,
-  evaluatedAt: new Date().toISOString(),
+  evaluatedAt: fixedClock.now(),
 };
 
 describe('Attempt State Machine & Invariants', () => {
-  it('enforces that a valid lifecycle succeeds', () => {
+  it('enforces that a valid lifecycle succeeds using FixedClock', () => {
     const attempt = Attempt.createDraft({
       id: 'att-1',
       problemId: 'parking-lot',
       learnerId: 'learner-1',
       formatId: 'structured-text',
       rawSubmission: { text: 'parking lot design' },
+      clock: fixedClock,
     });
 
     expect(attempt.status).toBe('DRAFT');
+    expect(attempt.createdAt).toBe('2026-09-15T12:00:00.000Z');
+    expect(attempt.updatedAt).toBe('2026-09-15T12:00:00.000Z');
     expect(attempt.report).toBeUndefined();
     expect(attempt.errorMessage).toBeUndefined();
+
+    // Advance clock
+    fixedClock.setTime('2026-09-15T12:05:00.000Z');
 
     // DRAFT -> SUBMITTED
     attempt.submit('idemp-key-1', sampleSpec);
     expect(attempt.status).toBe('SUBMITTED');
     expect(attempt.idempotencyKey).toBe('idemp-key-1');
+    expect(attempt.updatedAt).toBe('2026-09-15T12:05:00.000Z');
 
     // SUBMITTED -> EVALUATING
     attempt.beginEvaluation(sampleSpec);
@@ -76,26 +91,57 @@ describe('Attempt State Machine & Invariants', () => {
     expect(attempt.errorMessage).toBeUndefined();
   });
 
-  it('supports degraded completion when fallback evaluation is used', () => {
+  it('rejects completeWith(degradedReport) to prevent false healthy states', () => {
     const attempt = Attempt.createSubmitted({
-      id: 'att-2',
+      id: 'att-degrade-check',
       problemId: 'parking-lot',
       learnerId: 'learner-1',
       formatId: 'structured-text',
       rawSubmission: {},
-      idempotencyKey: 'idemp-key-2',
+      idempotencyKey: 'key-deg-1',
       spec: sampleSpec,
+      clock: fixedClock,
     });
 
     attempt.beginEvaluation(sampleSpec);
-    attempt.degradeWith({ ...sampleReport, degraded: true });
 
+    const degradedReport: EvaluationReport = {
+      ...sampleReport,
+      degraded: true,
+      evaluatorsFailed: ['llm'],
+    };
+
+    // Calling completeWith with a degraded report must throw
+    expect(() => attempt.completeWith(degradedReport)).toThrow(
+      /Cannot complete with a degraded report via completeWith/
+    );
+
+    // Using degradeWith must succeed and report degraded=true
+    attempt.degradeWith(degradedReport);
     expect(attempt.status).toBe('EVALUATED');
     expect(attempt.degraded).toBe(true);
-    expect(attempt.report).toBeDefined();
   });
 
-  it('supports transition to FAILED with error message', () => {
+  it('rejects degradeWith(healthyReport)', () => {
+    const attempt = Attempt.createSubmitted({
+      id: 'att-healthy-check',
+      problemId: 'parking-lot',
+      learnerId: 'learner-1',
+      formatId: 'structured-text',
+      rawSubmission: {},
+      idempotencyKey: 'key-healthy-1',
+      spec: sampleSpec,
+      clock: fixedClock,
+    });
+
+    attempt.beginEvaluation(sampleSpec);
+
+    expect(() => attempt.degradeWith(sampleReport)).toThrow(
+      /degradeWith requires a report with degraded=true/
+    );
+  });
+
+  it('supports transition to FAILED with error message and preserved idempotencyKey', () => {
     const attempt = Attempt.createSubmitted({
       id: 'att-3',
       problemId: 'parking-lot',
@@ -104,6 +150,7 @@ describe('Attempt State Machine & Invariants', () => {
       rawSubmission: {},
       idempotencyKey: 'idemp-key-3',
       spec: sampleSpec,
+      clock: fixedClock,
     });
 
     attempt.beginEvaluation(sampleSpec);
@@ -111,6 +158,7 @@ describe('Attempt State Machine & Invariants', () => {
 
     expect(attempt.status).toBe('FAILED');
     expect(attempt.errorMessage).toBe('Evaluator timed out');
+    expect(attempt.idempotencyKey).toBe('idemp-key-3');
     expect(attempt.report).toBeUndefined();
   });
 
@@ -121,10 +169,69 @@ describe('Attempt State Machine & Invariants', () => {
       learnerId: 'learner-1',
       formatId: 'structured-text',
       rawSubmission: {},
+      clock: fixedClock,
     });
 
     expect(() => attempt.submit('')).toThrow(/idempotencyKey is required/);
     expect(() => attempt.submit('   ')).toThrow(/idempotencyKey is required/);
+  });
+
+  describe('Rehydration & Corrupt State Validation', () => {
+    it('throws CorruptAttemptStateError if required fields are missing on rehydration', () => {
+      // EVALUATED without report
+      expect(() =>
+        Attempt.rehydrate({
+          id: 'corrupt-1',
+          problemId: 'parking-lot',
+          learnerId: 'learner-1',
+          state: {
+            status: 'EVALUATED',
+            rawSubmission: {},
+            formatId: 'structured-text',
+            idempotencyKey: 'key-1',
+            spec: sampleSpec,
+            report: null as any,
+          },
+          createdAt: '2026-09-15T12:00:00.000Z',
+          updatedAt: '2026-09-15T12:00:00.000Z',
+        })
+      ).toThrow(CorruptAttemptStateError);
+
+      // SUBMITTED without idempotencyKey
+      expect(() =>
+        Attempt.rehydrate({
+          id: 'corrupt-2',
+          problemId: 'parking-lot',
+          learnerId: 'learner-1',
+          state: {
+            status: 'SUBMITTED',
+            rawSubmission: {},
+            formatId: 'structured-text',
+            idempotencyKey: '',
+          },
+          createdAt: '2026-09-15T12:00:00.000Z',
+          updatedAt: '2026-09-15T12:00:00.000Z',
+        })
+      ).toThrow(CorruptAttemptStateError);
+
+      // FAILED without errorMessage
+      expect(() =>
+        Attempt.rehydrate({
+          id: 'corrupt-3',
+          problemId: 'parking-lot',
+          learnerId: 'learner-1',
+          state: {
+            status: 'FAILED',
+            rawSubmission: {},
+            formatId: 'structured-text',
+            idempotencyKey: 'key-1',
+            errorMessage: '   ',
+          },
+          createdAt: '2026-09-15T12:00:00.000Z',
+          updatedAt: '2026-09-15T12:00:00.000Z',
+        })
+      ).toThrow(CorruptAttemptStateError);
+    });
   });
 
   describe('Illegal Transitions Throws IllegalTransitionError', () => {
@@ -135,6 +242,7 @@ describe('Attempt State Machine & Invariants', () => {
         learnerId: 'learner-1',
         formatId: 'structured-text',
         rawSubmission: {},
+        clock: fixedClock,
       });
 
       expect(() => draft.beginEvaluation(sampleSpec)).toThrow(IllegalTransitionError);
@@ -151,6 +259,7 @@ describe('Attempt State Machine & Invariants', () => {
         formatId: 'structured-text',
         rawSubmission: {},
         idempotencyKey: 'key-123',
+        clock: fixedClock,
       });
 
       expect(() => submitted.submit('another-key')).toThrow(IllegalTransitionError);
@@ -166,6 +275,7 @@ describe('Attempt State Machine & Invariants', () => {
         formatId: 'structured-text',
         rawSubmission: {},
         idempotencyKey: 'key-123',
+        clock: fixedClock,
       });
       evaluating.beginEvaluation(sampleSpec);
 
@@ -181,6 +291,7 @@ describe('Attempt State Machine & Invariants', () => {
         formatId: 'structured-text',
         rawSubmission: {},
         idempotencyKey: 'key-123',
+        clock: fixedClock,
       });
       evaluated.beginEvaluation(sampleSpec);
       evaluated.completeWith(sampleReport);
@@ -200,6 +311,7 @@ describe('Attempt State Machine & Invariants', () => {
         formatId: 'structured-text',
         rawSubmission: {},
         idempotencyKey: 'key-123',
+        clock: fixedClock,
       });
       failed.beginEvaluation(sampleSpec);
       failed.fail('Fatal error');

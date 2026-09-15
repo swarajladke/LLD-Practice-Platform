@@ -3,10 +3,13 @@ import type { DimensionResult } from './DimensionResult.js';
 /**
  * Complete evaluation report aggregating all evaluated dimensions.
  * Stamped with rubricVersion to track which rubric generated the evaluation.
+ * Records which evaluators ran and which failed.
  */
 export interface EvaluationReport {
   readonly attemptId: string;
   readonly rubricVersion: string;
+  readonly evaluatorsRun: readonly string[];
+  readonly evaluatorsFailed: readonly string[];
   readonly dimensionResults: readonly DimensionResult[];
   readonly overallScore: number; // 0 to 5, computed from dimension weights
   readonly summary: string;

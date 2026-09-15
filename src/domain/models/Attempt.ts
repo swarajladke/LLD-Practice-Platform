@@ -1,6 +1,10 @@
-import { IllegalTransitionError } from '../errors/DomainErrors.js';
+import {
+  CorruptAttemptStateError,
+  IllegalTransitionError,
+} from '../errors/DomainErrors.js';
 import type { DesignSpec } from './DesignSpec.js';
 import type { EvaluationReport } from './EvaluationReport.js';
+import { type Clock, defaultClock } from '../services/Clock.js';
 
 export const ATTEMPT_STATUSES = [
   'DRAFT',
@@ -14,11 +18,12 @@ export type AttemptStatus = (typeof ATTEMPT_STATUSES)[number];
 
 /**
  * Strongly-typed discriminated union for Attempt state.
- * Invariants:
+ * Invariants enforced by type system:
  * - report exists ONLY when status === 'EVALUATED'
  * - errorMessage exists ONLY when status === 'FAILED'
  * - spec is guaranteed when status === 'EVALUATING' or 'EVALUATED'
  * - idempotencyKey is guaranteed once submitted
+ * - degraded is derived directly from report, not duplicated in state
  */
 export type AttemptState =
   | {
@@ -48,7 +53,6 @@ export type AttemptState =
       readonly idempotencyKey: string;
       readonly spec: DesignSpec;
       readonly report: EvaluationReport;
-      readonly degraded: boolean;
     }
   | {
       readonly status: 'FAILED';
@@ -66,8 +70,7 @@ export interface AttemptInitParams {
   readonly formatId: string;
   readonly rawSubmission: unknown;
   readonly spec?: DesignSpec;
-  readonly createdAt?: string;
-  readonly updatedAt?: string;
+  readonly clock?: Clock;
 }
 
 export interface AttemptSubmittedInitParams extends AttemptInitParams {
@@ -81,6 +84,7 @@ export interface AttemptRehydrateParams {
   readonly state: AttemptState;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly clock?: Clock;
 }
 
 /**
@@ -95,6 +99,7 @@ export class Attempt {
   private _state: AttemptState;
   readonly createdAt: string;
   private _updatedAt: string;
+  private readonly clock: Clock;
 
   private constructor(
     id: string,
@@ -102,7 +107,8 @@ export class Attempt {
     learnerId: string,
     state: AttemptState,
     createdAt: string,
-    updatedAt: string
+    updatedAt: string,
+    clock: Clock = defaultClock
   ) {
     this.id = id;
     this.problemId = problemId;
@@ -110,13 +116,15 @@ export class Attempt {
     this._state = state;
     this.createdAt = createdAt;
     this._updatedAt = updatedAt;
+    this.clock = clock;
   }
 
   /**
    * Factory to create an Attempt in DRAFT status.
    */
   static createDraft(params: AttemptInitParams): Attempt {
-    const now = new Date().toISOString();
+    const clock = params.clock ?? defaultClock;
+    const now = clock.now();
     return new Attempt(
       params.id,
       params.problemId,
@@ -127,8 +135,9 @@ export class Attempt {
         formatId: params.formatId,
         spec: params.spec,
       },
-      params.createdAt ?? now,
-      params.updatedAt ?? now
+      now,
+      now,
+      clock
     );
   }
 
@@ -139,7 +148,8 @@ export class Attempt {
     if (!params.idempotencyKey || params.idempotencyKey.trim().length === 0) {
       throw new Error('idempotencyKey is required when creating a submitted attempt');
     }
-    const now = new Date().toISOString();
+    const clock = params.clock ?? defaultClock;
+    const now = clock.now();
     return new Attempt(
       params.id,
       params.problemId,
@@ -151,22 +161,78 @@ export class Attempt {
         idempotencyKey: params.idempotencyKey.trim(),
         spec: params.spec,
       },
-      params.createdAt ?? now,
-      params.updatedAt ?? now
+      now,
+      now,
+      clock
     );
   }
 
   /**
-   * Rehydrates an Attempt aggregate from persistence.
+   * Rehydrates an Attempt aggregate from persistence and validates state consistency.
    */
   static rehydrate(params: AttemptRehydrateParams): Attempt {
+    const { id, state } = params;
+
+    if (!params.id || params.id.trim().length === 0) {
+      throw new CorruptAttemptStateError(id ?? 'unknown', 'Missing attempt id');
+    }
+    if (!params.problemId || !params.learnerId) {
+      throw new CorruptAttemptStateError(id, 'Missing problemId or learnerId');
+    }
+    if (!state || !state.status) {
+      throw new CorruptAttemptStateError(id, 'Missing state or status');
+    }
+
+    switch (state.status) {
+      case 'DRAFT':
+        if (!state.formatId) {
+          throw new CorruptAttemptStateError(id, 'DRAFT state missing formatId');
+        }
+        break;
+      case 'SUBMITTED':
+        if (!state.idempotencyKey || state.idempotencyKey.trim().length === 0) {
+          throw new CorruptAttemptStateError(id, 'SUBMITTED state missing idempotencyKey');
+        }
+        break;
+      case 'EVALUATING':
+        if (!state.idempotencyKey || state.idempotencyKey.trim().length === 0) {
+          throw new CorruptAttemptStateError(id, 'EVALUATING state missing idempotencyKey');
+        }
+        if (!state.spec) {
+          throw new CorruptAttemptStateError(id, 'EVALUATING state missing spec');
+        }
+        break;
+      case 'EVALUATED':
+        if (!state.idempotencyKey || state.idempotencyKey.trim().length === 0) {
+          throw new CorruptAttemptStateError(id, 'EVALUATED state missing idempotencyKey');
+        }
+        if (!state.spec) {
+          throw new CorruptAttemptStateError(id, 'EVALUATED state missing spec');
+        }
+        if (!state.report || !state.report.attemptId) {
+          throw new CorruptAttemptStateError(id, 'EVALUATED state missing valid report');
+        }
+        break;
+      case 'FAILED':
+        if (!state.idempotencyKey || state.idempotencyKey.trim().length === 0) {
+          throw new CorruptAttemptStateError(id, 'FAILED state missing idempotencyKey');
+        }
+        if (!state.errorMessage || state.errorMessage.trim().length === 0) {
+          throw new CorruptAttemptStateError(id, 'FAILED state missing errorMessage');
+        }
+        break;
+      default:
+        throw new CorruptAttemptStateError(id, `Unrecognized status '${(state as any).status}'`);
+    }
+
     return new Attempt(
       params.id,
       params.problemId,
       params.learnerId,
       params.state,
       params.createdAt,
-      params.updatedAt
+      params.updatedAt,
+      params.clock ?? defaultClock
     );
   }
 
@@ -206,8 +272,11 @@ export class Attempt {
     return this._state.status === 'FAILED' ? this._state.errorMessage : undefined;
   }
 
+  /**
+   * Single source of truth for degraded status: derived from the report.
+   */
   get degraded(): boolean {
-    return this._state.status === 'EVALUATED' ? this._state.degraded : false;
+    return this.report?.degraded ?? false;
   }
 
   // --- State Machine Transitions ---
@@ -231,7 +300,7 @@ export class Attempt {
       idempotencyKey: idempotencyKey.trim(),
       spec: spec ?? this._state.spec,
     };
-    this._updatedAt = new Date().toISOString();
+    this._updatedAt = this.clock.now();
   }
 
   /**
@@ -253,11 +322,12 @@ export class Attempt {
       idempotencyKey: this._state.idempotencyKey,
       spec,
     };
-    this._updatedAt = new Date().toISOString();
+    this._updatedAt = this.clock.now();
   }
 
   /**
-   * Transitions EVALUATING -> EVALUATED (healthy/complete).
+   * Transitions EVALUATING -> EVALUATED (healthy).
+   * Asserts report is not degraded to prevent false healthy states.
    */
   completeWith(report: EvaluationReport): void {
     if (this._state.status !== 'EVALUATING') {
@@ -265,6 +335,9 @@ export class Attempt {
     }
     if (!report) {
       throw new Error('EvaluationReport is required to complete evaluation');
+    }
+    if (report.degraded) {
+      throw new Error('Cannot complete with a degraded report via completeWith; use degradeWith');
     }
 
     this._state = {
@@ -274,13 +347,13 @@ export class Attempt {
       idempotencyKey: this._state.idempotencyKey,
       spec: this._state.spec,
       report,
-      degraded: false,
     };
-    this._updatedAt = new Date().toISOString();
+    this._updatedAt = this.clock.now();
   }
 
   /**
-   * Transitions EVALUATING -> EVALUATED (partial/degraded fallback).
+   * Transitions EVALUATING -> EVALUATED (degraded fallback).
+   * Asserts report is flagged as degraded.
    */
   degradeWith(partialReport: EvaluationReport): void {
     if (this._state.status !== 'EVALUATING') {
@@ -288,6 +361,9 @@ export class Attempt {
     }
     if (!partialReport) {
       throw new Error('Partial EvaluationReport is required to degrade evaluation');
+    }
+    if (!partialReport.degraded) {
+      throw new Error('degradeWith requires a report with degraded=true');
     }
 
     this._state = {
@@ -297,13 +373,13 @@ export class Attempt {
       idempotencyKey: this._state.idempotencyKey,
       spec: this._state.spec,
       report: partialReport,
-      degraded: true,
     };
-    this._updatedAt = new Date().toISOString();
+    this._updatedAt = this.clock.now();
   }
 
   /**
    * Transitions SUBMITTED or EVALUATING -> FAILED.
+   * State union narrowing guarantees idempotencyKey exists without fallback.
    */
   fail(reason: string): void {
     if (this._state.status !== 'EVALUATING' && this._state.status !== 'SUBMITTED') {
@@ -313,8 +389,8 @@ export class Attempt {
       throw new Error('Failure reason cannot be empty');
     }
 
-    const idempotencyKey =
-      'idempotencyKey' in this._state ? this._state.idempotencyKey : 'unknown';
+    // Narrowed to SUBMITTED | EVALUATING - TypeScript guarantees idempotencyKey is string
+    const idempotencyKey = this._state.idempotencyKey;
 
     this._state = {
       status: 'FAILED',
@@ -324,6 +400,6 @@ export class Attempt {
       spec: this._state.spec,
       errorMessage: reason.trim(),
     };
-    this._updatedAt = new Date().toISOString();
+    this._updatedAt = this.clock.now();
   }
 }

@@ -143,6 +143,8 @@ describe.each([
     attempt.completeWith({
       attemptId: 'att-lifecycle',
       rubricVersion: '1.0.0',
+      evaluatorsRun: ['rule-engine'],
+      evaluatorsFailed: [],
       overallScore: 4.5,
       summary: 'Solid implementation',
       degraded: false,
@@ -165,6 +167,7 @@ describe.each([
     expect(rehydrated).not.toBeNull();
     expect(rehydrated?.status).toBe('EVALUATED');
     expect(rehydrated?.report?.rubricVersion).toBe('1.0.0');
+    expect(rehydrated?.report?.evaluatorsRun).toEqual(['rule-engine']);
     expect(rehydrated?.report?.dimensionResults[0].evidence.quote).toBe('isOpen');
     expect(rehydrated?.report?.dimensionResults[0].evidence.sourcePath).toBe('entities[0].attributes[0]');
   });

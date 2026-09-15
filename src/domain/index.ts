@@ -8,6 +8,9 @@ export * from './models/Problem.js';
 export * from './models/Attempt.js';
 export * from './models/LearningLoop.js';
 
+// Domain Services & Clocks
+export * from './services/Clock.js';
+
 // Domain Errors
 export * from './errors/DomainErrors.js';
 
