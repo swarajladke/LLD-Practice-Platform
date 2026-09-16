@@ -1,28 +1,39 @@
+import * as crypto from 'node:crypto';
 import { Attempt } from '../../domain/models/Attempt.js';
 import type { AttemptRepository } from '../../domain/interfaces/AttemptRepository.js';
 import type { ProblemRepository } from '../../domain/interfaces/ProblemRepository.js';
 import type { SubmissionFormat } from '../../domain/interfaces/SubmissionFormat.js';
-import type { EvaluationContext } from '../../domain/interfaces/Evaluator.js';
 import { CompositeEvaluator } from '../evaluators/CompositeEvaluator.js';
 import { EvaluationReportAssembler } from '../evaluators/EvaluationReportAssembler.js';
 import type { Clock } from '../../domain/services/Clock.js';
 import { defaultClock } from '../../domain/services/Clock.js';
+import {
+  IdempotencyPayloadMismatchError,
+  ProblemNotFoundError,
+  UnsupportedFormatError,
+  ValidationFailedError,
+} from '../../domain/errors/DomainErrors.js';
 
 export interface SubmitAttemptRequest {
   readonly id?: string;
   readonly problemId: string;
   readonly learnerId: string;
-  readonly formatId: string;
+  readonly formatId?: string;
   readonly rawSubmission: unknown;
   readonly idempotencyKey: string;
 }
 
-export interface SubmitAttemptResult {
-  readonly attemptId: string;
-  readonly status: string;
-  readonly isExisting: boolean;
-  readonly validationErrors?: readonly { path: string; message: string }[];
-}
+export type SubmitAttemptResult =
+  | {
+      readonly outcome: 'accepted';
+      readonly attemptId: string;
+      readonly status: string;
+      readonly isReplay: boolean;
+    }
+  | {
+      readonly outcome: 'rejected';
+      readonly validationErrors: readonly { path: string; message: string }[];
+    };
 
 export class EvaluationService {
   constructor(
@@ -34,52 +45,63 @@ export class EvaluationService {
     private readonly clock: Clock = defaultClock
   ) {}
 
-  /**
-   * Submits an attempt idempotently, persists immediately as SUBMITTED,
-   * launches async background evaluation, and returns immediately with attemptId + status.
-   */
   async submitAttempt(request: SubmitAttemptRequest): Promise<SubmitAttemptResult> {
-    const { learnerId, problemId, formatId, rawSubmission, idempotencyKey } = request;
+    const { learnerId, problemId, rawSubmission, idempotencyKey } = request;
+    const formatId = request.formatId || 'structured-text';
 
+    if (!learnerId || learnerId.trim().length === 0) {
+      throw new ValidationFailedError([{ path: 'learnerId', message: 'learnerId is required' }]);
+    }
+    if (!problemId || problemId.trim().length === 0) {
+      throw new ValidationFailedError([{ path: 'problemId', message: 'problemId is required' }]);
+    }
     if (!idempotencyKey || idempotencyKey.trim().length === 0) {
-      throw new Error('idempotencyKey is required for submission');
+      throw new ValidationFailedError([{ path: 'idempotencyKey', message: 'idempotencyKey is required' }]);
+    }
+    if (rawSubmission === undefined || rawSubmission === null) {
+      throw new ValidationFailedError([{ path: 'rawSubmission', message: 'rawSubmission is required' }]);
     }
 
-    // 1. Idempotency check: if an attempt with this key already exists for this learner, return it
+    // 1. Check idempotency
     const existing = await this.attemptRepo.findByIdempotencyKey(learnerId, idempotencyKey.trim());
     if (existing) {
+      const existingRaw = JSON.stringify(existing.rawSubmission);
+      const incomingRaw = JSON.stringify(rawSubmission);
+      if (existingRaw !== incomingRaw) {
+        throw new IdempotencyPayloadMismatchError(idempotencyKey.trim());
+      }
+
       return {
+        outcome: 'accepted',
         attemptId: existing.id,
         status: existing.status,
-        isExisting: true,
+        isReplay: true,
       };
     }
 
     // 2. Validate problem exists
     const problem = await this.problemRepo.findById(problemId);
     if (!problem) {
-      throw new Error(`Problem with id '${problemId}' not found`);
+      throw new ProblemNotFoundError(problemId);
     }
 
     // 3. Resolve submission format
     const format = this.formats.get(formatId);
     if (!format) {
-      throw new Error(`Unsupported submission format '${formatId}'`);
+      throw new UnsupportedFormatError(formatId);
     }
 
     // 4. Parse and validate raw payload
     const parseResult = format.parseAndValidate(rawSubmission);
     if (!parseResult.success || !parseResult.spec) {
       return {
-        attemptId: '',
-        status: 'VALIDATION_FAILED',
-        isExisting: false,
+        outcome: 'rejected',
         validationErrors: parseResult.errors ?? [{ path: 'root', message: 'Invalid submission format' }],
       };
     }
 
-    // 5. Persist submission BEFORE evaluation starts so it survives evaluator failure
-    const attemptId = request.id ?? `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // 5. Persist submission BEFORE evaluation starts using crypto.randomUUID()
+    const attemptId = request.id ?? crypto.randomUUID();
     const attempt = Attempt.createSubmitted({
       id: attemptId,
       problemId,
@@ -93,72 +115,97 @@ export class EvaluationService {
 
     await this.attemptRepo.save(attempt);
 
-    // 6. Launch in-process async evaluation (non-blocking)
-    // Run un-awaited so the submit endpoint returns immediately
-    void this.runEvaluationAsync(attemptId, problemId, parseResult.spec);
+    // 6. Launch in-process async evaluation with unhandled rejection protection
+    void this.runEvaluationAsync(attemptId, problemId, parseResult.spec).catch((err) => {
+      console.error(`Unhandled background evaluation failure for attempt '${attemptId}':`, err);
+    });
 
     return {
+      outcome: 'accepted',
       attemptId: attempt.id,
       status: attempt.status,
-      isExisting: false,
+      isReplay: false,
     };
   }
 
-  /**
-   * Internal async runner orchestrating the state machine and evaluation lifecycle.
-   */
   async runEvaluationAsync(
     attemptId: string,
     problemId: string,
     spec: NonNullable<Attempt['spec']>
   ): Promise<void> {
-    const attempt = await this.attemptRepo.findById(attemptId);
-    const problem = await this.problemRepo.findById(problemId);
-
-    if (!attempt || !problem) {
-      return;
-    }
-
     try {
-      // Transition: SUBMITTED -> EVALUATING
+      const attempt = await this.attemptRepo.findById(attemptId);
+      const problem = await this.problemRepo.findById(problemId);
+
+      if (!attempt || !problem) {
+        return;
+      }
+
       attempt.beginEvaluation(spec);
       await this.attemptRepo.save(attempt);
 
-      const ctx: EvaluationContext = {
+      const { results, provenance } = await this.compositeEvaluator.evaluate({
         attemptId,
         spec,
         problem,
         rubric: problem.rubric,
-      };
+      });
 
-      // Run composite evaluation
-      const dimensionResults = await this.compositeEvaluator.evaluate(ctx);
-      const provenance = this.compositeEvaluator.getProvenance();
-
-      // Assemble final report
       const report = this.assembler.assemble({
         attemptId,
         rubric: problem.rubric,
-        results: dimensionResults,
+        results,
         provenance,
       });
 
-      // Transition: EVALUATING -> EVALUATED (healthy or degraded)
-      if (report.degraded) {
-        attempt.degradeWith(report);
-      } else {
-        attempt.completeWith(report);
+      // Ensure attempt was not marked FAILED by a sweep in the meantime
+      const current = await this.attemptRepo.findById(attemptId);
+      if (!current || current.status !== 'EVALUATING') {
+        return;
       }
 
-      await this.attemptRepo.save(attempt);
+      if (report.degraded) {
+        current.degradeWith(report);
+      } else {
+        current.completeWith(report);
+      }
+
+      await this.attemptRepo.save(current);
     } catch (evalError) {
-      const reason = evalError instanceof Error ? evalError.message : String(evalError);
+      console.error(`Evaluation failure encountered for attempt '${attemptId}':`, evalError);
       try {
-        attempt.fail(reason);
-        await this.attemptRepo.save(attempt);
-      } catch {
-        // Safe fallback
+        const attempt = await this.attemptRepo.findById(attemptId);
+        if (attempt && (attempt.status === 'SUBMITTED' || attempt.status === 'EVALUATING')) {
+          const reason = evalError instanceof Error ? evalError.message : String(evalError);
+          attempt.fail(reason);
+          await this.attemptRepo.save(attempt);
+        }
+      } catch (innerErr) {
+        console.error(`Failed to record failure status for attempt '${attemptId}':`, innerErr);
       }
     }
+  }
+
+  /**
+   * Sweeps and recovers stale attempts left in EVALUATING status past deadlineMs.
+   */
+  async recoverStaleEvaluations(deadlineMs: number = 30000): Promise<number> {
+    const evaluating = await this.attemptRepo.findEvaluating();
+    const nowMs = Date.parse(this.clock.now());
+    let recoveredCount = 0;
+
+    for (const attempt of evaluating) {
+      const startedAt = attempt.evaluationStartedAt ?? attempt.updatedAt;
+      const startedMs = Date.parse(startedAt);
+      if (nowMs - startedMs > deadlineMs) {
+        attempt.fail(
+          `Evaluation timed out and was recovered by stale-evaluation sweep (deadline: ${deadlineMs}ms)`
+        );
+        await this.attemptRepo.save(attempt);
+        recoveredCount++;
+      }
+    }
+
+    return recoveredCount;
   }
 }

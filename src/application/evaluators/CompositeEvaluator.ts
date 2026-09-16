@@ -9,9 +9,11 @@ export interface CompositeEvaluatorConfig {
   readonly timeoutMs?: number; // default 15000ms
 }
 
-/**
- * Wraps a promise in a timeout. Rejects with an error if time elapses.
- */
+export interface CompositeEvaluationResult {
+  readonly results: readonly DimensionResult[];
+  readonly provenance: EvaluatorProvenance;
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, evaluatorId: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -30,21 +32,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number, evaluatorId: string): P
 
 /**
  * CompositeEvaluator:
- * - Implements Evaluator, returning readonly DimensionResult[].
- * - Runs child evaluators concurrently using Promise.allSettled with per-evaluator timeouts.
- * - Resolves conflicts across overlapping dimensions using confidence-weighted average.
- * - Exposes full provenance (run, failed, skipped).
- * - Fully nestable inside other CompositeEvaluators.
+ * - Pure stateless evaluation engine (no mutable instance properties).
+ * - Concurrently executes child evaluators using Promise.allSettled with per-evaluator timeouts.
+ * - Returns { results, provenance } atomically per evaluation call.
+ * - Resolves overlapping dimensions via confidence-weighted averaging.
+ * - Nestable inside other CompositeEvaluators.
  */
-export class CompositeEvaluator implements Evaluator {
+export class CompositeEvaluator {
   readonly id: string;
   private readonly evaluators: readonly Evaluator[];
   private readonly timeoutMs: number;
-  private lastProvenance: EvaluatorProvenance = {
-    evaluatorsRun: [],
-    evaluatorsFailed: [],
-    evaluatorsSkipped: [],
-  };
 
   constructor(evaluators: readonly Evaluator[], config?: CompositeEvaluatorConfig) {
     if (!evaluators || evaluators.length === 0) {
@@ -59,15 +56,7 @@ export class CompositeEvaluator implements Evaluator {
     return this.evaluators.some((e) => e.supports(ctx));
   }
 
-  getProvenance(): EvaluatorProvenance {
-    return {
-      evaluatorsRun: [...this.lastProvenance.evaluatorsRun],
-      evaluatorsFailed: [...this.lastProvenance.evaluatorsFailed],
-      evaluatorsSkipped: [...this.lastProvenance.evaluatorsSkipped],
-    };
-  }
-
-  async evaluate(ctx: EvaluationContext): Promise<readonly DimensionResult[]> {
+  async evaluate(ctx: EvaluationContext): Promise<CompositeEvaluationResult> {
     const evaluatorsRun: string[] = [];
     const evaluatorsFailed: string[] = [];
     const evaluatorsSkipped: string[] = [];
@@ -82,7 +71,6 @@ export class CompositeEvaluator implements Evaluator {
       }
     }
 
-    // Run active evaluators concurrently with timeouts
     const settledResults = await Promise.allSettled(
       activeEvaluators.map((evaluator) =>
         withTimeout(evaluator.evaluate(ctx), this.timeoutMs, evaluator.id)
@@ -97,25 +85,33 @@ export class CompositeEvaluator implements Evaluator {
 
       if (outcome.status === 'fulfilled') {
         evaluatorsRun.push(evaluator.id);
-        // If child is a CompositeEvaluator, merge its sub-provenance
-        if ('getProvenance' in evaluator && typeof (evaluator as any).getProvenance === 'function') {
-          const childProv = (evaluator as any).getProvenance() as EvaluatorProvenance;
-          evaluatorsFailed.push(...childProv.evaluatorsFailed);
-          evaluatorsSkipped.push(...childProv.evaluatorsSkipped);
+
+        const val = outcome.value as unknown;
+        let dimResults: readonly DimensionResult[];
+
+        // Support nested CompositeEvaluator which returns { results, provenance }
+        if (val && typeof val === 'object' && 'results' in val && 'provenance' in val) {
+          const compResult = val as CompositeEvaluationResult;
+          dimResults = compResult.results;
+          evaluatorsFailed.push(...compResult.provenance.evaluatorsFailed);
+          evaluatorsSkipped.push(...compResult.provenance.evaluatorsSkipped);
+        } else {
+          dimResults = outcome.value as readonly DimensionResult[];
         }
 
-        for (const res of outcome.value) {
+        for (const res of dimResults) {
           const list = dimensionResultsMap.get(res.criterion) ?? [];
           list.push(res);
           dimensionResultsMap.set(res.criterion, list);
         }
       } else {
-        const reason = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+        const reason =
+          outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
         evaluatorsFailed.push(`${evaluator.id} (${reason})`);
       }
     }
 
-    this.lastProvenance = {
+    const provenance: EvaluatorProvenance = {
       evaluatorsRun: Array.from(new Set(evaluatorsRun)),
       evaluatorsFailed: Array.from(new Set(evaluatorsFailed)),
       evaluatorsSkipped: Array.from(new Set(evaluatorsSkipped)),
@@ -127,7 +123,6 @@ export class CompositeEvaluator implements Evaluator {
       );
     }
 
-    // Merge candidates per dimension
     const mergedResults: DimensionResult[] = [];
 
     for (const dimension of RUBRIC_DIMENSIONS) {
@@ -170,6 +165,9 @@ export class CompositeEvaluator implements Evaluator {
       });
     }
 
-    return mergedResults;
+    return {
+      results: mergedResults,
+      provenance,
+    };
   }
 }

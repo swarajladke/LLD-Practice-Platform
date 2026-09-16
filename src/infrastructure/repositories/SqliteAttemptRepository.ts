@@ -22,6 +22,7 @@ interface AttemptRow {
   report: string | null;
   error_message: string | null;
   degraded: number;
+  evaluation_started_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -52,12 +53,14 @@ export class SqliteAttemptRepository implements AttemptRepository {
         report TEXT,
         error_message TEXT,
         degraded INTEGER NOT NULL DEFAULT 0,
+        evaluation_started_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE (learner_id, idempotency_key)
       );
       CREATE INDEX IF NOT EXISTS idx_attempts_learner ON attempts(learner_id);
       CREATE INDEX IF NOT EXISTS idx_attempts_learner_problem ON attempts(learner_id, problem_id);
+      CREATE INDEX IF NOT EXISTS idx_attempts_status ON attempts(status);
     `);
   }
 
@@ -68,16 +71,17 @@ export class SqliteAttemptRepository implements AttemptRepository {
     const idempotencyKey = attempt.idempotencyKey ?? null;
     const errorMessage = attempt.errorMessage ?? null;
     const degraded = attempt.degraded ? 1 : 0;
+    const evaluationStartedAt = attempt.evaluationStartedAt ?? null;
 
     const stmt = this.db.prepare(`
       INSERT INTO attempts (
         id, problem_id, learner_id, format_id, status,
         idempotency_key, raw_submission, spec, report,
-        error_message, degraded, created_at, updated_at
+        error_message, degraded, evaluation_started_at, created_at, updated_at
       ) VALUES (
         @id, @problem_id, @learner_id, @format_id, @status,
         @idempotency_key, @raw_submission, @spec, @report,
-        @error_message, @degraded, @created_at, @updated_at
+        @error_message, @degraded, @evaluation_started_at, @created_at, @updated_at
       )
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status,
@@ -87,6 +91,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
         report = excluded.report,
         error_message = excluded.error_message,
         degraded = excluded.degraded,
+        evaluation_started_at = excluded.evaluation_started_at,
         updated_at = excluded.updated_at
     `);
 
@@ -103,6 +108,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
         report: serializedReport,
         error_message: errorMessage,
         degraded,
+        evaluation_started_at: evaluationStartedAt,
         created_at: attempt.createdAt,
         updated_at: attempt.updatedAt,
       });
@@ -144,6 +150,14 @@ export class SqliteAttemptRepository implements AttemptRepository {
       'SELECT * FROM attempts WHERE learner_id = ? ORDER BY created_at ASC'
     );
     const rows = stmt.all(learnerId) as AttemptRow[];
+    return rows.map((r) => this.rowToAttempt(r));
+  }
+
+  async findEvaluating(): Promise<readonly Attempt[]> {
+    const stmt = this.db.prepare(
+      "SELECT * FROM attempts WHERE status = 'EVALUATING' ORDER BY created_at ASC"
+    );
+    const rows = stmt.all() as AttemptRow[];
     return rows.map((r) => this.rowToAttempt(r));
   }
 
@@ -229,6 +243,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
           formatId: row.format_id,
           idempotencyKey: row.idempotency_key ?? '',
           spec: spec!,
+          evaluationStartedAt: row.evaluation_started_at ?? row.updated_at,
         };
         break;
       case 'EVALUATED':
@@ -239,6 +254,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
           idempotencyKey: row.idempotency_key ?? '',
           spec: spec!,
           report: report!,
+          evaluationStartedAt: row.evaluation_started_at ?? undefined,
         };
         break;
       case 'FAILED':
@@ -249,6 +265,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
           idempotencyKey: row.idempotency_key ?? '',
           spec,
           errorMessage: row.error_message ?? 'Unknown error',
+          evaluationStartedAt: row.evaluation_started_at ?? undefined,
         };
         break;
     }

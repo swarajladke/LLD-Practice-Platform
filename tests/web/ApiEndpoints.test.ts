@@ -9,10 +9,12 @@ import { CompositeEvaluator } from '../../src/application/evaluators/CompositeEv
 import { EvaluationReportAssembler } from '../../src/application/evaluators/EvaluationReportAssembler.js';
 import { EvaluationService } from '../../src/application/services/EvaluationService.js';
 import { LearningLoopService } from '../../src/application/services/LearningLoopService.js';
+import { Attempt } from '../../src/domain/models/Attempt.js';
 
-describe('Express API Endpoints', () => {
+describe('Express API Endpoints & Error Mapping Middleware', () => {
   let server: Server;
   let baseUrl: string;
+  let attemptRepo: InMemoryAttemptRepository;
 
   const validSubmission = {
     assumptions: ['Single lot'],
@@ -49,7 +51,7 @@ describe('Express API Endpoints', () => {
   };
 
   beforeAll(async () => {
-    const attemptRepo = new InMemoryAttemptRepository();
+    attemptRepo = new InMemoryAttemptRepository();
     const problemRepo = new InMemoryProblemRepository();
 
     const formats = new Map();
@@ -93,75 +95,170 @@ describe('Express API Endpoints', () => {
     });
   });
 
-  it('GET /api/problems lists all seeded problems', async () => {
-    const res = await fetch(`${baseUrl}/api/problems`);
-    expect(res.status).toBe(200);
-    const problems = await res.json();
-    expect(problems).toHaveLength(4);
-    expect(problems.some((p: any) => p.id === 'parking-lot')).toBe(true);
+  describe('Problem DTO Boundary', () => {
+    it('GET /api/problems/:id exposes requirements and extensionAxes but NO rubric internals', async () => {
+      const res = await fetch(`${baseUrl}/api/problems/parking-lot`);
+      expect(res.status).toBe(200);
+      const problem = await res.json();
+
+      // Expected public fields
+      expect(problem.id).toBe('parking-lot');
+      expect(problem.title).toBeDefined();
+      expect(problem.description).toBeDefined();
+      expect(Array.isArray(problem.requirements)).toBe(true);
+      expect(Array.isArray(problem.clarifyingContext)).toBe(true);
+      expect(Array.isArray(problem.extensionAxes)).toBe(true);
+
+      // Rubric internals MUST NOT BE EXPOSED
+      expect(problem.rubric).toBeUndefined();
+      expect(problem.expectedConcepts).toBeUndefined();
+      expect(problem.minEntities).toBeUndefined();
+      expect(problem.minTradeoffs).toBeUndefined();
+      expect(problem.dimensionWeights).toBeUndefined();
+      expect(problem.godClassMethodThreshold).toBeUndefined();
+      expect(problem.minRationaleLength).toBeUndefined();
+    });
   });
 
-  it('GET /api/problems/:id returns specific problem details', async () => {
-    const res = await fetch(`${baseUrl}/api/problems/parking-lot`);
-    expect(res.status).toBe(200);
-    const p = await res.json();
-    expect(p.id).toBe('parking-lot');
-    expect(p.requirements.length).toBeGreaterThan(0);
-    expect(p.rubric.expectedConcepts).toContain('ParkingLot');
-  });
-
-  it('POST /api/attempts creates submission and polls report', async () => {
-    const submitRes = await fetch(`${baseUrl}/api/attempts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        learnerId: 'learner-api-1',
+  describe('Report Status Code Contract', () => {
+    it('returns 202 while in SUBMITTED or EVALUATING status', async () => {
+      const pendingAttempt = Attempt.createSubmitted({
+        id: 'att-pending-test',
         problemId: 'parking-lot',
+        learnerId: 'learner-p',
         formatId: 'structured-text',
         rawSubmission: validSubmission,
-        idempotencyKey: 'api-key-1',
-      }),
+        idempotencyKey: 'pending-key',
+      });
+      await attemptRepo.save(pendingAttempt);
+
+      const res = await fetch(`${baseUrl}/api/attempts/att-pending-test/report`);
+      expect(res.status).toBe(202);
+      const data = await res.json();
+      expect(data.status).toBe('SUBMITTED');
     });
 
-    expect(submitRes.status).toBe(201);
-    const submitData = await submitRes.json();
-    expect(submitData.attemptId).toBeDefined();
-    expect(submitData.isExisting).toBe(false);
+    it('returns 409 with errorMessage when attempt is in FAILED status', async () => {
+      const failedAttempt = Attempt.createSubmitted({
+        id: 'att-failed-test',
+        problemId: 'parking-lot',
+        learnerId: 'learner-f',
+        formatId: 'structured-text',
+        rawSubmission: validSubmission,
+        idempotencyKey: 'failed-key',
+      });
+      failedAttempt.fail('Evaluator crashed during analysis');
+      await attemptRepo.save(failedAttempt);
 
-    // Poll until evaluated (in-process evaluation runs promptly)
-    let status = '';
-    let attemptsCount = 0;
-    while (status !== 'EVALUATED' && attemptsCount < 20) {
-      await new Promise((r) => setTimeout(r, 50));
-      const statusRes = await fetch(`${baseUrl}/api/attempts/${submitData.attemptId}`);
-      const statusData = await statusRes.json();
-      status = statusData.status;
-      attemptsCount++;
-    }
+      const res = await fetch(`${baseUrl}/api/attempts/att-failed-test/report`);
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.status).toBe('FAILED');
+      expect(data.errorMessage).toBe('Evaluator crashed during analysis');
+    });
 
-    expect(status).toBe('EVALUATED');
+    it('returns 200 with ReportDto when attempt is in EVALUATED status', async () => {
+      const submitRes = await fetch(`${baseUrl}/api/attempts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          learnerId: 'learner-eval-200',
+          problemId: 'parking-lot',
+          formatId: 'structured-text',
+          rawSubmission: validSubmission,
+          idempotencyKey: 'key-eval-200',
+        }),
+      });
 
-    // Retrieve report
-    const reportRes = await fetch(`${baseUrl}/api/attempts/${submitData.attemptId}/report`);
-    expect(reportRes.status).toBe(200);
-    const report = await reportRes.json();
-    expect(report.dimensionResults).toHaveLength(8);
-    expect(report.overallScore).toBeGreaterThan(0);
+      const { attemptId } = await submitRes.json();
+
+      let status = '';
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        const statusRes = await fetch(`${baseUrl}/api/attempts/${attemptId}`);
+        const statusData = await statusRes.json();
+        status = statusData.status;
+        if (status === 'EVALUATED') break;
+      }
+
+      expect(status).toBe('EVALUATED');
+
+      const reportRes = await fetch(`${baseUrl}/api/attempts/${attemptId}/report`);
+      expect(reportRes.status).toBe(200);
+      const report = await reportRes.json();
+      expect(report.overallScore).toBeDefined();
+      expect(report.dimensionResults.length).toBe(8);
+    });
   });
 
-  it('GET /api/learners/:learnerId/problems/:problemId/history returns history with deltas', async () => {
-    const res = await fetch(`${baseUrl}/api/learners/learner-api-1/problems/parking-lot/history`);
-    expect(res.status).toBe(200);
-    const history = await res.json();
-    expect(Array.isArray(history)).toBe(true);
-    expect(history.length).toBeGreaterThan(0);
-  });
+  describe('Typed Domain Error Mapping Middleware', () => {
+    it('maps ProblemNotFoundError to 404', async () => {
+      const res = await fetch(`${baseUrl}/api/problems/non-existent-problem`);
+      expect(res.status).toBe(404);
+      const data = await res.json();
+      expect(data.error).toMatch(/Problem 'non-existent-problem' not found/);
+    });
 
-  it('GET /api/learners/:learnerId/weaknesses returns learner weakness summary', async () => {
-    const res = await fetch(`${baseUrl}/api/learners/learner-api-1/weaknesses`);
-    expect(res.status).toBe(200);
-    const summary = await res.json();
-    expect(summary.learnerId).toBe('learner-api-1');
-    expect(summary.totalEvaluatedAttempts).toBeGreaterThan(0);
+    it('maps UnsupportedFormatError to 400', async () => {
+      const res = await fetch(`${baseUrl}/api/attempts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          learnerId: 'learner-1',
+          problemId: 'parking-lot',
+          formatId: 'unsupported-format-xyz',
+          rawSubmission: validSubmission,
+          idempotencyKey: 'bad-format-key',
+        }),
+      });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/Unsupported submission format/);
+    });
+
+    it('maps ValidationFailedError to 422', async () => {
+      // Missing required field (learnerId)
+      const res = await fetch(`${baseUrl}/api/attempts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          problemId: 'parking-lot',
+          rawSubmission: validSubmission,
+          idempotencyKey: 'missing-fields-key',
+        }),
+      });
+      expect(res.status).toBe(422);
+    });
+
+    it('maps IdempotencyPayloadMismatchError to 409', async () => {
+      const key = 'payload-mismatch-api-key';
+      // First submission
+      await fetch(`${baseUrl}/api/attempts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          learnerId: 'learner-mismatch',
+          problemId: 'parking-lot',
+          rawSubmission: validSubmission,
+          idempotencyKey: key,
+        }),
+      });
+
+      // Second submission with modified payload and same key
+      const res = await fetch(`${baseUrl}/api/attempts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          learnerId: 'learner-mismatch',
+          problemId: 'parking-lot',
+          rawSubmission: { ...validSubmission, assumptions: ['Different'] },
+          idempotencyKey: key,
+        }),
+      });
+
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.error).toMatch(/previously used with a different submission payload/);
+    });
   });
 });

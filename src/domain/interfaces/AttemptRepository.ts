@@ -10,4 +10,5 @@ export interface AttemptRepository {
   findByIdempotencyKey(learnerId: string, key: string): Promise<Attempt | null>;
   findByLearnerAndProblem(learnerId: string, problemId: string): Promise<readonly Attempt[]>;
   listByLearner(learnerId: string): Promise<readonly Attempt[]>;
+  findEvaluating(): Promise<readonly Attempt[]>;
 }

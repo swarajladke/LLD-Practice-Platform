@@ -9,6 +9,8 @@ import { EvaluationService } from '../../src/application/services/EvaluationServ
 import { LearningLoopService } from '../../src/application/services/LearningLoopService.js';
 import { Attempt } from '../../src/domain/models/Attempt.js';
 import { quoteRef } from '../../src/domain/models/Evidence.js';
+import { FixedClock } from '../../src/domain/services/Clock.js';
+import { IdempotencyPayloadMismatchError } from '../../src/domain/errors/DomainErrors.js';
 import type { EvaluationReport } from '../../src/domain/models/EvaluationReport.js';
 
 const validRawSpec = {
@@ -59,7 +61,7 @@ describe('StructuredTextFormat Validation', () => {
 
     const missingTradeoffs = {
       ...validRawSpec,
-      tradeoffs: [validRawSpec.tradeoffs[0]], // Only 1
+      tradeoffs: [validRawSpec.tradeoffs[0]],
     };
     const res2 = format.parseAndValidate(missingTradeoffs);
     expect(res2.success).toBe(false);
@@ -89,10 +91,12 @@ describe('EvaluationService & Idempotency', () => {
   let attemptRepo: InMemoryAttemptRepository;
   let problemRepo: InMemoryProblemRepository;
   let service: EvaluationService;
+  let fixedClock: FixedClock;
 
   beforeEach(() => {
     attemptRepo = new InMemoryAttemptRepository();
     problemRepo = new InMemoryProblemRepository();
+    fixedClock = new FixedClock('2026-09-15T12:00:00.000Z');
 
     const formats = new Map();
     const format = new StructuredTextFormat();
@@ -100,9 +104,16 @@ describe('EvaluationService & Idempotency', () => {
 
     const detEval = new DeterministicEvaluator();
     const composite = new CompositeEvaluator([detEval]);
-    const assembler = new EvaluationReportAssembler();
+    const assembler = new EvaluationReportAssembler(fixedClock);
 
-    service = new EvaluationService(attemptRepo, problemRepo, formats, composite, assembler);
+    service = new EvaluationService(
+      attemptRepo,
+      problemRepo,
+      formats,
+      composite,
+      assembler,
+      fixedClock
+    );
   });
 
   it('idempotent resubmission creates no duplicate evaluation and returns existing attempt', async () => {
@@ -115,17 +126,73 @@ describe('EvaluationService & Idempotency', () => {
     };
 
     const firstResult = await service.submitAttempt(req);
-    expect(firstResult.isExisting).toBe(false);
-    expect(firstResult.attemptId).toBeDefined();
+    expect(firstResult.outcome).toBe('accepted');
+    if (firstResult.outcome === 'accepted') {
+      expect(firstResult.isReplay).toBe(false);
+      expect(firstResult.attemptId).toBeDefined();
 
-    // Second call with same learner and idempotency key
-    const secondResult = await service.submitAttempt(req);
-    expect(secondResult.isExisting).toBe(true);
-    expect(secondResult.attemptId).toBe(firstResult.attemptId);
+      const secondResult = await service.submitAttempt(req);
+      expect(secondResult.outcome).toBe('accepted');
+      if (secondResult.outcome === 'accepted') {
+        expect(secondResult.isReplay).toBe(true);
+        expect(secondResult.attemptId).toBe(firstResult.attemptId);
+      }
+    }
 
-    // Repository has exactly 1 attempt
     const attempts = await attemptRepo.listByLearner('learner-1');
     expect(attempts).toHaveLength(1);
+  });
+
+  it('throws IdempotencyPayloadMismatchError when idempotency key is reused with modified payload', async () => {
+    const key = 'shared-idemp-key';
+    await service.submitAttempt({
+      problemId: 'parking-lot',
+      learnerId: 'learner-alice',
+      rawSubmission: validRawSpec,
+      idempotencyKey: key,
+    });
+
+    const modifiedSpec = {
+      ...validRawSpec,
+      assumptions: ['Different assumption'],
+    };
+
+    await expect(
+      service.submitAttempt({
+        problemId: 'parking-lot',
+        learnerId: 'learner-alice',
+        rawSubmission: modifiedSpec,
+        idempotencyKey: key,
+      })
+    ).rejects.toThrow(IdempotencyPayloadMismatchError);
+  });
+
+  it('recovers stale evaluating attempts using recoverStaleEvaluations with FixedClock', async () => {
+    // Submit attempt at 12:00:00
+    const submitResult = await service.submitAttempt({
+      problemId: 'parking-lot',
+      learnerId: 'learner-stale',
+      rawSubmission: validRawSpec,
+      idempotencyKey: 'stale-key',
+    });
+
+    expect(submitResult.outcome).toBe('accepted');
+    if (submitResult.outcome !== 'accepted') return;
+
+    // Simulate in-flight EVALUATING state that got stuck
+    const attempt = await attemptRepo.findById(submitResult.attemptId);
+    expect(attempt).not.toBeNull();
+
+    // Advance clock past deadline (30,000ms deadline -> advance 60,000ms)
+    fixedClock.setTime('2026-09-15T12:01:00.000Z');
+
+    // Run sweep
+    const recovered = await service.recoverStaleEvaluations(30000);
+    expect(recovered).toBe(1);
+
+    const recoveredAttempt = await attemptRepo.findById(submitResult.attemptId);
+    expect(recoveredAttempt?.status).toBe('FAILED');
+    expect(recoveredAttempt?.errorMessage).toMatch(/recovered by stale-evaluation sweep/);
   });
 });
 
@@ -209,17 +276,14 @@ describe('LearningLoopService History Deltas & Recurring Weaknesses', () => {
     const reqDelta = deltas.find((d) => d.criterion === 'requirementUnderstanding')!;
     const couplingDelta = deltas.find((d) => d.criterion === 'couplingCohesion')!;
 
-    expect(classDelta.delta).toBe(1.5); // 3.5 - 2.0 = +1.5
+    expect(classDelta.delta).toBe(1.5);
     expect(reqDelta.delta).toBe(0.0);
-    expect(couplingDelta.delta).toBe(-0.5); // 2.5 - 3.0 = -0.5
+    expect(couplingDelta.delta).toBe(-0.5);
   });
 
   it('aggregates recurring weaknesses across 3 attempts and identifies lowest dimensions', () => {
-    // Attempt 1: classResp = 2.0, coupling = 2.5, reqUnder = 5.0
     const att1 = makeEvaluatedAttempt('att-1', { classResp: 2.0, reqUnder: 5.0, coupling: 2.5 });
-    // Attempt 2: classResp = 2.5, coupling = 3.0, reqUnder = 5.0
     const att2 = makeEvaluatedAttempt('att-2', { classResp: 2.5, reqUnder: 5.0, coupling: 3.0 });
-    // Attempt 3: classResp = 2.0, coupling = 3.5, reqUnder = 5.0
     const att3 = makeEvaluatedAttempt('att-3', { classResp: 2.0, reqUnder: 5.0, coupling: 3.5 });
 
     const summary = learningLoop.computeWeaknesses('learner-1', [att1, att2, att3]);
@@ -227,14 +291,12 @@ describe('LearningLoopService History Deltas & Recurring Weaknesses', () => {
     expect(summary.totalEvaluatedAttempts).toBe(3);
     expect(summary.recurringWeaknesses.length).toBeGreaterThanOrEqual(1);
 
-    // Lowest dimension must be classResponsibilities (avg: 2.17)
     const lowest = summary.recurringWeaknesses[0];
     expect(lowest.criterion).toBe('classResponsibilities');
     expect(lowest.averageScore).toBeLessThan(3.0);
     expect(lowest.recurringConcerns.length).toBeGreaterThan(0);
     expect(lowest.recommendedFocus).toContain('Single Responsibility Principle');
 
-    // requirementUnderstanding (avg: 5.0) should NOT be flagged as a weakness
     const reqWeakness = summary.recurringWeaknesses.find((w) => w.criterion === 'requirementUnderstanding');
     expect(reqWeakness).toBeUndefined();
   });

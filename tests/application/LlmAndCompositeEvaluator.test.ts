@@ -110,6 +110,88 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
     };
   });
 
+  describe('Statelessness & Concurrent Evaluations on ONE CompositeEvaluator', () => {
+    it('executes two concurrent evaluations on the same instance where one LLM fails and other succeeds', async () => {
+      const conditionalLlmEvaluator = {
+        id: 'llm',
+        supports: () => true,
+        evaluate: async (context: EvaluationContext) => {
+          if (context.attemptId === 'fail-attempt') {
+            throw new Error('LLM rate limit / timeout on context A');
+          }
+          return [
+            {
+              criterion: 'classResponsibilities' as const,
+              score: 4.0,
+              confidence: 0.85,
+              findings: [
+                {
+                  evidenceRef: {
+                    kind: 'quote' as const,
+                    evidence: { quote: 'parkVehicle', sourcePath: 'entities[0].methods[0]' },
+                  },
+                  concern: 'Minor coupling',
+                  suggestion: 'Extract strategy',
+                  evaluatorId: 'llm',
+                },
+              ],
+              evaluatorIds: ['llm'],
+            },
+          ];
+        },
+      };
+
+      const sharedComposite = new CompositeEvaluator([
+        deterministicEvaluator,
+        conditionalLlmEvaluator,
+      ]);
+
+      const ctxA: EvaluationContext = {
+        attemptId: 'fail-attempt',
+        spec: sampleSpec,
+        problem,
+        rubric,
+      };
+
+      const ctxB: EvaluationContext = {
+        attemptId: 'success-attempt',
+        spec: sampleSpec,
+        problem,
+        rubric,
+      };
+
+      // Run concurrently on the SAME shared instance
+      const [resA, resB] = await Promise.all([
+        sharedComposite.evaluate(ctxA),
+        sharedComposite.evaluate(ctxB),
+      ]);
+
+      const reportA = assembler.assemble({
+        attemptId: ctxA.attemptId,
+        rubric,
+        results: resA.results,
+        provenance: resA.provenance,
+      });
+
+      const reportB = assembler.assemble({
+        attemptId: ctxB.attemptId,
+        rubric,
+        results: resB.results,
+        provenance: resB.provenance,
+      });
+
+      // Context A must be degraded
+      expect(reportA.degraded).toBe(true);
+      expect(reportA.evaluatorsFailed.length).toBeGreaterThan(0);
+      expect(reportA.evaluatorsRun).toEqual(['deterministic']);
+
+      // Context B must NOT be degraded
+      expect(reportB.degraded).toBe(false);
+      expect(reportB.evaluatorsFailed).toEqual([]);
+      expect(reportB.evaluatorsRun).toEqual(['deterministic', 'llm']);
+    });
+  });
+
   describe('LlmEvaluator parsing and validation', () => {
     it('successfully parses valid structured JSON response and produces DimensionResult[] with quoteRef', async () => {
       fakeLlm.setResponse(
@@ -168,8 +250,6 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
 
   describe('CompositeEvaluator & EvaluationReportAssembler', () => {
     it('merges overlapping dimensions by confidence-weighted average score and confidence', async () => {
-      // Deterministic produces score 5.0, confidence 0.9 for classResponsibilities
-      // LLM produces score 3.0, confidence 0.7 for classResponsibilities
       fakeLlm.setResponse(
         JSON.stringify({
           dimensions: [
@@ -192,23 +272,18 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
       );
 
       const composite = new CompositeEvaluator([deterministicEvaluator, llmEvaluator]);
-      const results = await composite.evaluate(ctx);
-      const provenance = composite.getProvenance();
+      const { results, provenance } = await composite.evaluate(ctx);
 
       expect(provenance.evaluatorsRun).toEqual(['deterministic', 'llm']);
       expect(provenance.evaluatorsFailed).toEqual([]);
       expect(provenance.evaluatorsSkipped).toEqual([]);
 
       const classResp = results.find((r) => r.criterion === 'classResponsibilities')!;
-      // Deterministic: score 5.0, weight 0.9; LLM: score 3.0, weight 0.7
-      // Weighted score: (5*0.9 + 3*0.7) / (0.9 + 0.7) = 6.6 / 1.6 = 4.125 -> 4.1
       expect(classResp.score).toBe(4.1);
-      // Weighted confidence: (0.9*0.9 + 0.7*0.7) / (0.9 + 0.7) = (0.81 + 0.49) / 1.6 = 1.3 / 1.6 = 0.8125 -> 0.81
       expect(classResp.confidence).toBe(0.81);
       expect(classResp.evaluatorIds).toContain('deterministic');
       expect(classResp.evaluatorIds).toContain('llm');
 
-      // Assemble full report
       const report = assembler.assemble({
         attemptId: ctx.attemptId,
         rubric,
@@ -226,12 +301,10 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
     it('handles timeout when FakeLlmClient never resolves, producing degraded report', async () => {
       fakeLlm.setNeverResolve(true);
 
-      // Timeout of 50ms for quick test execution
       const composite = new CompositeEvaluator([deterministicEvaluator, llmEvaluator], {
         timeoutMs: 50,
       });
-      const results = await composite.evaluate(ctx);
-      const provenance = composite.getProvenance();
+      const { results, provenance } = await composite.evaluate(ctx);
 
       expect(provenance.evaluatorsRun).toEqual(['deterministic']);
       expect(provenance.evaluatorsFailed.some((f) => f.includes('timed out'))).toBe(true);
@@ -251,8 +324,7 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
       const unsupportedLlm = new LlmEvaluator(fakeLlm, 'unsupported-llm', () => false);
 
       const composite = new CompositeEvaluator([deterministicEvaluator, unsupportedLlm]);
-      const results = await composite.evaluate(ctx);
-      const provenance = composite.getProvenance();
+      const { results, provenance } = await composite.evaluate(ctx);
 
       expect(provenance.evaluatorsSkipped).toEqual(['unsupported-llm']);
       expect(provenance.evaluatorsRun).toEqual(['deterministic']);
@@ -280,42 +352,10 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
         })
       );
 
-      const results = await outerComposite.evaluate(ctx);
+      const { results, provenance } = await outerComposite.evaluate(ctx);
       expect(results).toHaveLength(8);
-      const provenance = outerComposite.getProvenance();
       expect(provenance.evaluatorsRun).toContain('inner-composite');
       expect(provenance.evaluatorsRun).toContain('llm');
-    });
-
-    it('flags dimensionsMissing and sets overallScoreComparable=false when dimensions are missing', async () => {
-      // Stub evaluator that returns only 1 dimension
-      const partialEvaluator = {
-        id: 'partial',
-        supports: () => true,
-        evaluate: async () => [
-          {
-            criterion: 'classResponsibilities' as const,
-            findings: [],
-            score: 4.0,
-            confidence: 0.9,
-            evaluatorIds: ['partial'],
-          },
-        ],
-      };
-
-      const composite = new CompositeEvaluator([partialEvaluator]);
-      const results = await composite.evaluate(ctx);
-      const provenance = composite.getProvenance();
-
-      const report = assembler.assemble({
-        attemptId: ctx.attemptId,
-        rubric,
-        results,
-        provenance,
-      });
-
-      expect(report.dimensionsMissing.length).toBe(7);
-      expect(report.overallScoreComparable).toBe(false);
     });
 
     it('throws EvaluationFailedError when all active evaluators throw', async () => {

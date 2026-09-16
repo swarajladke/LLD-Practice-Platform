@@ -23,7 +23,7 @@ export type AttemptStatus = (typeof ATTEMPT_STATUSES)[number];
  * - errorMessage exists ONLY when status === 'FAILED'
  * - spec is guaranteed when status === 'EVALUATING' or 'EVALUATED'
  * - idempotencyKey is guaranteed once submitted
- * - degraded is derived directly from report, not duplicated in state
+ * - evaluationStartedAt is tracked when transitioning to EVALUATING
  */
 export type AttemptState =
   | {
@@ -45,6 +45,7 @@ export type AttemptState =
       readonly formatId: string;
       readonly idempotencyKey: string;
       readonly spec: DesignSpec;
+      readonly evaluationStartedAt: string;
     }
   | {
       readonly status: 'EVALUATED';
@@ -53,6 +54,7 @@ export type AttemptState =
       readonly idempotencyKey: string;
       readonly spec: DesignSpec;
       readonly report: EvaluationReport;
+      readonly evaluationStartedAt?: string;
     }
   | {
       readonly status: 'FAILED';
@@ -61,6 +63,7 @@ export type AttemptState =
       readonly idempotencyKey: string;
       readonly spec?: DesignSpec;
       readonly errorMessage: string;
+      readonly evaluationStartedAt?: string;
     };
 
 export interface AttemptInitParams {
@@ -89,8 +92,6 @@ export interface AttemptRehydrateParams {
 
 /**
  * Attempt Aggregate Root owning its lifecycle state machine.
- * External code cannot mutate status directly; it must invoke domain methods.
- * Invalid transitions immediately throw IllegalTransitionError.
  */
 export class Attempt {
   readonly id: string;
@@ -119,9 +120,6 @@ export class Attempt {
     this.clock = clock;
   }
 
-  /**
-   * Factory to create an Attempt in DRAFT status.
-   */
   static createDraft(params: AttemptInitParams): Attempt {
     const clock = params.clock ?? defaultClock;
     const now = clock.now();
@@ -141,9 +139,6 @@ export class Attempt {
     );
   }
 
-  /**
-   * Factory to create an Attempt directly in SUBMITTED status.
-   */
   static createSubmitted(params: AttemptSubmittedInitParams): Attempt {
     if (!params.idempotencyKey || params.idempotencyKey.trim().length === 0) {
       throw new Error('idempotencyKey is required when creating a submitted attempt');
@@ -167,9 +162,6 @@ export class Attempt {
     );
   }
 
-  /**
-   * Rehydrates an Attempt aggregate from persistence and validates state consistency.
-   */
   static rehydrate(params: AttemptRehydrateParams): Attempt {
     const { id, state } = params;
 
@@ -272,19 +264,16 @@ export class Attempt {
     return this._state.status === 'FAILED' ? this._state.errorMessage : undefined;
   }
 
-  /**
-   * Single source of truth for degraded status: derived from the report.
-   */
+  get evaluationStartedAt(): string | undefined {
+    return 'evaluationStartedAt' in this._state ? this._state.evaluationStartedAt : undefined;
+  }
+
   get degraded(): boolean {
     return this.report?.degraded ?? false;
   }
 
   // --- State Machine Transitions ---
 
-  /**
-   * Transitions DRAFT -> SUBMITTED.
-   * Requires non-empty idempotencyKey.
-   */
   submit(idempotencyKey: string, spec?: DesignSpec): void {
     if (this._state.status !== 'DRAFT') {
       throw new IllegalTransitionError(this._state.status, 'submit');
@@ -303,10 +292,6 @@ export class Attempt {
     this._updatedAt = this.clock.now();
   }
 
-  /**
-   * Transitions SUBMITTED -> EVALUATING.
-   * Requires canonical DesignSpec.
-   */
   beginEvaluation(spec: DesignSpec): void {
     if (this._state.status !== 'SUBMITTED') {
       throw new IllegalTransitionError(this._state.status, 'beginEvaluation');
@@ -315,20 +300,18 @@ export class Attempt {
       throw new Error('DesignSpec is required to begin evaluation');
     }
 
+    const now = this.clock.now();
     this._state = {
       status: 'EVALUATING',
       rawSubmission: this._state.rawSubmission,
       formatId: this._state.formatId,
       idempotencyKey: this._state.idempotencyKey,
       spec,
+      evaluationStartedAt: now,
     };
-    this._updatedAt = this.clock.now();
+    this._updatedAt = now;
   }
 
-  /**
-   * Transitions EVALUATING -> EVALUATED (healthy).
-   * Asserts report is not degraded to prevent false healthy states.
-   */
   completeWith(report: EvaluationReport): void {
     if (this._state.status !== 'EVALUATING') {
       throw new IllegalTransitionError(this._state.status, 'completeWith');
@@ -340,6 +323,7 @@ export class Attempt {
       throw new Error('Cannot complete with a degraded report via completeWith; use degradeWith');
     }
 
+    const prevStarted = this._state.evaluationStartedAt;
     this._state = {
       status: 'EVALUATED',
       rawSubmission: this._state.rawSubmission,
@@ -347,14 +331,11 @@ export class Attempt {
       idempotencyKey: this._state.idempotencyKey,
       spec: this._state.spec,
       report,
+      evaluationStartedAt: prevStarted,
     };
     this._updatedAt = this.clock.now();
   }
 
-  /**
-   * Transitions EVALUATING -> EVALUATED (degraded fallback).
-   * Asserts report is flagged as degraded.
-   */
   degradeWith(partialReport: EvaluationReport): void {
     if (this._state.status !== 'EVALUATING') {
       throw new IllegalTransitionError(this._state.status, 'degradeWith');
@@ -366,6 +347,7 @@ export class Attempt {
       throw new Error('degradeWith requires a report with degraded=true');
     }
 
+    const prevStarted = this._state.evaluationStartedAt;
     this._state = {
       status: 'EVALUATED',
       rawSubmission: this._state.rawSubmission,
@@ -373,14 +355,11 @@ export class Attempt {
       idempotencyKey: this._state.idempotencyKey,
       spec: this._state.spec,
       report: partialReport,
+      evaluationStartedAt: prevStarted,
     };
     this._updatedAt = this.clock.now();
   }
 
-  /**
-   * Transitions SUBMITTED or EVALUATING -> FAILED.
-   * State union narrowing guarantees idempotencyKey exists without fallback.
-   */
   fail(reason: string): void {
     if (this._state.status !== 'EVALUATING' && this._state.status !== 'SUBMITTED') {
       throw new IllegalTransitionError(this._state.status, 'fail');
@@ -389,8 +368,8 @@ export class Attempt {
       throw new Error('Failure reason cannot be empty');
     }
 
-    // Narrowed to SUBMITTED | EVALUATING - TypeScript guarantees idempotencyKey is string
     const idempotencyKey = this._state.idempotencyKey;
+    const prevStarted = 'evaluationStartedAt' in this._state ? this._state.evaluationStartedAt : undefined;
 
     this._state = {
       status: 'FAILED',
@@ -399,6 +378,7 @@ export class Attempt {
       idempotencyKey,
       spec: this._state.spec,
       errorMessage: reason.trim(),
+      evaluationStartedAt: prevStarted,
     };
     this._updatedAt = this.clock.now();
   }

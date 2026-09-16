@@ -2,13 +2,8 @@ import { DuplicateIdempotencyKeyError } from '../../domain/errors/DomainErrors.j
 import type { AttemptRepository } from '../../domain/interfaces/AttemptRepository.js';
 import type { Attempt } from '../../domain/models/Attempt.js';
 
-/**
- * In-memory implementation of AttemptRepository.
- * Enforces uniqueness on (learnerId, idempotencyKey) and isolates tests from SQLite.
- */
 export class InMemoryAttemptRepository implements AttemptRepository {
   private readonly attemptsById = new Map<string, Attempt>();
-  // Map of `${learnerId}:${idempotencyKey}` -> attemptId
   private readonly idempotencyIndex = new Map<string, string>();
 
   async save(attempt: Attempt): Promise<void> {
@@ -54,6 +49,16 @@ export class InMemoryAttemptRepository implements AttemptRepository {
       }
     }
     return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async findEvaluating(): Promise<readonly Attempt[]> {
+    const results: Attempt[] = [];
+    for (const attempt of this.attemptsById.values()) {
+      if (attempt.status === 'EVALUATING') {
+        results.push(attempt);
+      }
+    }
+    return results;
   }
 
   clear(): void {

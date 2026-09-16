@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function getFilesRecursively(dir: string): string[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -17,17 +18,26 @@ function getFilesRecursively(dir: string): string[] {
 }
 
 describe('Domain Layer Architecture Boundary', () => {
-  const domainDir = path.resolve(__dirname, '../../src/domain');
-  const forbiddenPatterns = [
-    /from\s+['"]express['"]/,
-    /from\s+['"]react['"]/,
-    /from\s+['"]react-dom['"]/,
-    /from\s+['"]better-sqlite3['"]/,
-    /from\s+['"]sqlite3['"]/,
-    /from\s+['"]vite['"]/,
-    /from\s+['"].*\/application\/.*['"]/,
-    /from\s+['"].*\/infrastructure\/.*['"]/,
-    /from\s+['"].*\/web\/.*['"]/,
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const domainDir = path.resolve(currentDir, '../../src/domain');
+
+  const forbiddenImportPatterns = [
+    // Static imports/exports
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]express['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]react['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]react-dom['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]better-sqlite3['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]sqlite3['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]vite['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]fs['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"]node:fs['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"].*\/application\/.*['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"].*\/infrastructure\/.*['"]/,
+    /(?:from|export\s+(?:.*)\s+from)\s+['"].*\/web\/.*['"]/,
+    // CommonJS require
+    /require\(\s*['"](?:express|react|better-sqlite3|sqlite3|vite|fs|node:fs|.*\/application\/.*|.*\/infrastructure\/.*|.*\/web\/.*)['"]\s*\)/,
+    // Dynamic import
+    /import\(\s*['"](?:express|react|better-sqlite3|sqlite3|vite|fs|node:fs|.*\/application\/.*|.*\/infrastructure\/.*|.*\/web\/.*)['"]\s*\)/,
   ];
 
   it('asserts domain layer has zero outward imports (inward-pointing clean architecture)', () => {
@@ -38,7 +48,7 @@ describe('Domain Layer Architecture Boundary', () => {
 
     for (const file of domainFiles) {
       const content = fs.readFileSync(file, 'utf-8');
-      for (const pattern of forbiddenPatterns) {
+      for (const pattern of forbiddenImportPatterns) {
         const match = content.match(pattern);
         if (match) {
           violations.push({
