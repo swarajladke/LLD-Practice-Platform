@@ -139,7 +139,7 @@ This document records the collaborative pairing process between the engineer and
   - The human engineer verified the research rows against available public marketing and free-tier pages. (Note: Premium feedback internals for Hello Interview, algomaster.io, Low Level Design Mastery, and lldproblems.com are behind paywalls and explicitly marked as unverified in `docs/RESEARCH.md`).
   - The AI's initial framing ("no structured LLD feedback exists") was **REJECTED** as factually wrong after the research surfaced that four active competitors are already shipping automated or LLM-driven LLD feedback experiences.
 - **Decision & Refined Positioning**:
-  - The positioning was narrowed to what actually differentiates the platform: AI feedback on LLD now exists, but it is per-session, ungrounded in the learner's own text with line citations, not pinned to a versioned rubric, and not aggregated across problems into a longitudinal learning loop.
+  - The positioning was narrowed to what actually differentiates the platform: AI feedback on LLD now exists, but it is per-session, ungrounded in the learner's own text with citations to specific paths in the learner's submission, not pinned to a versioned rubric, and not aggregated across problems into a longitudinal learning loop.
 
 ---
 

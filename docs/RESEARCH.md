@@ -19,41 +19,30 @@ In LLD, however, learners face fundamental obstacles:
 ## 2. Competitive Landscape & Comparison Table
 
 > [!NOTE]
-> Competitor analysis rows for Hello Interview, algomaster.io, Low Level Design Mastery, and lldproblems.com are based on publicly available marketing, documentation, and free-tier pages, because premium feedback internals are paywalled.
+> Rows for Hello Interview, algomaster.io, Low Level Design Mastery, and lldproblems.com are based on public marketing and free-tier pages because premium feedback internals are paywalled.
 
 The following comparison matrix evaluates real-world tools and common learner workflows across five dimensions:
 
-| Tool / Approach | Practice Workflow | Submission Format | Feedback Type | Learning Loop | Gap |
+| Tool | Practice workflow | Submission format | Feedback type | Learning loop | Gap |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **LeetCode / HackerRank (DSA Style)** | | | | | |
-| **Educative / Grokking the OOD Interview** | | | | | |
-| **ByteByteGo / High-Level Design Platforms** | | | | | |
-| **Exercism / Mentorship Platforms** | | | | | |
-| **Generic "Ask ChatGPT" Workflow** | | | | | |
-| **Hello Interview (Low-Level Design Track)** | | | | | |
-| **Algomaster.io** | | | | | |
-| **Low Level Design Mastery / LLDProblems.com** | | | | | |
+| **Hello Interview** (LLD Guided Practice) | Pick from 9 problems (Connect Four, Elevator, Parking Lot, Rate Limiter), ~35 min, step-by-step through a Requirements to Design to Extensibility framework | Free-form per step | Instant AI feedback per step, described as rubric-based, tuned by FAANG interviewers | Per-problem "History" of past runs | Rubric is not exposed or versioned, so scores are not verifiably comparable across attempts; no cross-problem weakness aggregation; feedback is not tied to quoted spans of the submission |
+| **algomaster.io** (LLD Practice) | 45 problems across 9 sections, step-by-step | Not publicly documented | "AI powered evaluation and feedback" | Section-based progression | Evaluation is a single opaque AI pass — no separation of deterministic checks from judgement, so the learner cannot tell which criticisms are mechanically certain |
+| **Low Level Design Mastery** | 43 problems, explicit 4-step loop: Pick Problem, Draw Diagram, Write Code, AI review; XP and levels | Diagram plus code in 6 languages | AI review at the end of the workspace | Gamified XP, achievements, "Current Drill" | Progression is volume-based (XP), not diagnosis-based; no per-dimension score history, so a learner repeating the same mistake still levels up |
+| **lldproblems.com** | 100+ machine-coding problems (Uber, Swiggy, Flipkart), gamified unlock from functional to non-functional to schema | Chat-based interview simulation | Conversational interviewer simulation | Gated unlocking by mastery tier | Conversational output is not structured into stable dimensions, so nothing is trackable or aggregable over time |
+| **Educative / Grokking the LLD Interview** | Chaptered lessons on OOD principles and UML (use case, class, sequence, activity) | None — read-only | Worked solutions the learner self-compares against | Course completion percentage | No evaluation of the learner's own design at all; self-assessment against a model answer, which learners systematically over-score |
+| **AlgoExpert / SystemsExpert** | 25 fundamentals modules, 13 design questions, 38 videos, 50-question quiz, workspace | Free-form notes in a workspace | Video solutions, not feedback | Quiz scores | The workspace records the design but nothing reads it; feedback is one-way content delivery |
+| **Exercism** | Solve exercise, automated tests run, then request human mentoring | Code | Automated tests, then a human mentor who gives hints rather than answers; learners resubmit iterations | Iteration history per exercise with mentor continuity | Closest analogue to a real learning loop, but hours-to-days latency, dependent on volunteer availability, and no LLD or design coverage at all (it tests code correctness, not class structure) |
+| **ChatGPT / generic LLM** | Paste a design, ask for critique | Free-form prose | Fluent, immediate, ungrounded | None — no memory of prior attempts | No fixed rubric (scores drift between sessions), no evidence citation, invents strengths, and cannot report what the learner keeps getting wrong |
 
 ---
 
 ## 3. Key Market Gaps
 
-Analyzing the specific landscape rows above highlights three structural gaps:
-
-1. **Unstructured Prose vs. Grounded Syntactic Anchors**:
-   - In **Row 1 (LeetCode / HackerRank)**, submission requires compiling and executing full runnable code against unit tests; this tests language boilerplate and algorithmic mechanics rather than low-level object-oriented decomposition and architectural boundaries.
-   - In **Row 2 (Educative)** and **Row 6 (Low Level Design Mastery)**, learners are predominantly presented with static editorial solutions or freeform text fields without automated structural validation.
-   - In **Row 5 (Generic ChatGPT Workflow)**, unconstrained prose submissions cause LLMs to hallucinate requirements, miss subtle class coupling flaws, and produce flattering commentary that lacks verifiable line-level citations.
-
-2. **Binary Scoring vs. Multi-Dimensional Rubric Grounding**:
-   - In **Row 1 (LeetCode)**, the feedback signal is strictly binary (Passed / Failed test cases), offering zero insight into cohesion, separation of concerns, or testability.
-   - In **Row 3 (ByteByteGo)**, analysis focuses on macro architectural topologies (load balancers, caching, partitions), leaving class-level encapsulation and interface abstraction out of scope.
-   - In **Row 7 (Hello Interview Low-Level Design Track)**, comprehensive interview guides and qualitative rubrics are provided, but automated, deterministic evaluation across orthogonal OOD dimensions (SRP, cohesion, interface segregation, extensibility) remains absent.
-
-3. **Absence of Memory (Longitudinal Learning Loop)**:
-   - In **Row 4 (Exercism)**, human mentors provide high-quality feedback on individual exercises, but there is no automated system that tracks score trajectories or aggregates recurring anti-patterns across exercises.
-   - In **Row 5 (ChatGPT)**, practice happens in ephemeral, stateless chat windows with zero memory of previous design attempts.
-   - Across **Row 2 (Educative)**, **Row 6 (Low Level Design Mastery)**, and **Row 7 (Hello Interview)**, problems are treated as standalone exercises. None of these offerings compute dimension deltas between consecutive submissions or maintain an aggregate registry of the learner's recurring architectural weaknesses.
+1. **Feedback is not grounded in the learner's own words.** Rows 1-4 all produce AI critique; none cites the exact span of the submission it is reacting to. A learner who disagrees has no way to check. Addressed by Evidence/sourcePath citations plus absenceRef for omissions such as unstated assumptions.
+2. **Scores are not comparable over time.** Rows 1, 3, and 4 track activity (history, XP, unlocked tiers) rather than per-dimension movement against a pinned rubric. Without a rubricVersion, last week's 3.5 and today's 3.5 are different measurements. Addressed by a versioned rubric plus per-dimension deltas.
+3. **Mechanical facts and opinions arrive indistinguishable.** Rows 2, 3, 4, and 8 return one AI verdict. "Your ParkingLot class has 11 methods" is checkable; "your abstraction feels forced" is judgement. Conflating them makes learners either over-trust or dismiss everything. Addressed by the deterministic/LLM split with contributor badges.
+4. **Nothing reports what the learner keeps getting wrong.** Row 7 has genuine iteration history but no design coverage; rows 5, 6, and 8 have no loop at all. No tool aggregates weaknesses across problems. Addressed by recurring-weakness aggregation.
+5. **The one real human-feedback loop is too slow to practice against.** Row 7 shows learners will iterate when feedback is specific, but hours of latency breaks the practice rhythm. Addressed by sub-15-second hybrid evaluation, with human review documented as an amendment path.
 
 ---
 
@@ -63,18 +52,19 @@ Our platform addresses these gaps with a focused, minimal architecture:
 
 - **Canonical Structured Spec**: The learner submits a structured design spec (`assumptions`, `entities`, `relationships`, `interfaces`, `tradeoffs`, `extensibility`). This provides the exact structure needed for deterministic heuristics while grounding LLM judgment in cited evidence.
 - **Hybrid Evaluation Engine**: Combines zero-cost deterministic rule heuristics (god classes, orphan entities, anemic models, uncovered extension axes) with an evidence-grounded LLM evaluator operating under strict temperature 0 and Zod validation.
-- **Explainable Feedback**: Every finding carries an honest citation (`EvidenceRef`) linking directly to the learner's JSON path or explicitly noting the absence of an expected requirement.
+- **Explainable Feedback**: Every finding carries an honest citation (`EvidenceRef`) with citations to specific paths in the learner's submission or explicitly noting the absence of an expected requirement.
 - **Continuous Learning Loop**: Per-attempt dimension deltas comparing consecutive submissions, coupled with an aggregated "Recurring Weaknesses" analyzer that surfaces persistent architectural anti-patterns across multiple practice sessions.
 
 ---
 
 ## 5. Source URLs & References
 
-- **LeetCode**: [https://leetcode.com](https://leetcode.com)
-- **Educative (Grokking OOD)**: [https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles](https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles)
-- **ByteByteGo**: [https://bytebytego.com](https://bytebytego.com)
-- **Exercism**: [https://exercism.org](https://exercism.org)
 - **Hello Interview (Low-Level Design Track)**: [https://www.hellointerview.com/learn/system-design/in-a-hurry/low-level-design](https://www.hellointerview.com/learn/system-design/in-a-hurry/low-level-design)
 - **Algomaster.io**: [https://algomaster.io](https://algomaster.io)
 - **Low Level Design Mastery**: [https://lowleveldesign.io](https://lowleveldesign.io)
 - **LLDProblems.com**: [https://lldproblems.com](https://lldproblems.com)
+- **Educative (Grokking OOD)**: [https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles](https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles)
+- **AlgoExpert / SystemsExpert**: [https://www.algoexpert.io/systems/product](https://www.algoexpert.io/systems/product)
+- **Exercism**: [https://exercism.org](https://exercism.org)
+- **LeetCode**: [https://leetcode.com](https://leetcode.com)
+- **ByteByteGo**: [https://bytebytego.com](https://bytebytego.com)
