@@ -1,6 +1,6 @@
 import type { Evaluator, EvaluationContext } from '../../domain/interfaces/Evaluator.js';
 import type { DimensionResult, Finding } from '../../domain/models/DimensionResult.js';
-import type { EvaluatorProvenance } from '../../domain/models/EvaluationReport.js';
+import type { EvaluatorProvenance, FailedEvaluatorInfo } from '../../domain/models/EvaluationReport.js';
 import { RUBRIC_DIMENSIONS, type RubricDimension } from '../../domain/models/Rubric.js';
 import { EvaluationFailedError } from '../../domain/errors/DomainErrors.js';
 
@@ -13,6 +13,8 @@ export interface CompositeEvaluationResult {
   readonly results: readonly DimensionResult[];
   readonly provenance: EvaluatorProvenance;
 }
+
+export type EvaluatorChild = Evaluator | CompositeEvaluator;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, evaluatorId: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -32,18 +34,18 @@ function withTimeout<T>(promise: Promise<T>, ms: number, evaluatorId: string): P
 
 /**
  * CompositeEvaluator:
- * - Pure stateless evaluation engine (no mutable instance properties).
+ * - Pure stateless evaluation orchestration engine (does not implement Evaluator).
  * - Concurrently executes child evaluators using Promise.allSettled with per-evaluator timeouts.
- * - Returns { results, provenance } atomically per evaluation call.
+ * - Returns CompositeEvaluationResult { results, provenance } atomically per evaluation call.
  * - Resolves overlapping dimensions via confidence-weighted averaging.
- * - Nestable inside other CompositeEvaluators.
+ * - Namespaces nested child ids as `<parentId>/<childId>`.
  */
-export class CompositeEvaluator implements Evaluator {
+export class CompositeEvaluator {
   readonly id: string;
-  private readonly evaluators: readonly Evaluator[];
+  private readonly evaluators: readonly EvaluatorChild[];
   private readonly timeoutMs: number;
 
-  constructor(evaluators: readonly Evaluator[], config?: CompositeEvaluatorConfig) {
+  constructor(evaluators: readonly EvaluatorChild[], config?: CompositeEvaluatorConfig) {
     if (!evaluators || evaluators.length === 0) {
       throw new Error('CompositeEvaluator requires at least one evaluator');
     }
@@ -58,10 +60,10 @@ export class CompositeEvaluator implements Evaluator {
 
   async evaluate(ctx: EvaluationContext): Promise<CompositeEvaluationResult> {
     const evaluatorsRun: string[] = [];
-    const evaluatorsFailed: string[] = [];
+    const evaluatorsFailed: FailedEvaluatorInfo[] = [];
     const evaluatorsSkipped: string[] = [];
 
-    const activeEvaluators: Evaluator[] = [];
+    const activeEvaluators: EvaluatorChild[] = [];
 
     for (const evaluator of this.evaluators) {
       if (!evaluator.supports(ctx)) {
@@ -71,11 +73,19 @@ export class CompositeEvaluator implements Evaluator {
       }
     }
 
-    const settledResults = await Promise.allSettled(
-      activeEvaluators.map((evaluator) =>
-        withTimeout(evaluator.evaluate(ctx), this.timeoutMs, evaluator.id)
-      )
-    );
+    const executionPromises = activeEvaluators.map((evaluator) => {
+      if (evaluator instanceof CompositeEvaluator) {
+        return withTimeout(evaluator.evaluate(ctx), this.timeoutMs, evaluator.id).then(
+          (res) => ({ kind: 'composite' as const, evaluator, res })
+        );
+      } else {
+        return withTimeout(evaluator.evaluate(ctx), this.timeoutMs, evaluator.id).then(
+          (res) => ({ kind: 'leaf' as const, evaluator, res })
+        );
+      }
+    });
+
+    const settledResults = await Promise.allSettled(executionPromises);
 
     const dimensionResultsMap = new Map<RubricDimension, DimensionResult[]>();
 
@@ -84,42 +94,64 @@ export class CompositeEvaluator implements Evaluator {
       const outcome = settledResults[i];
 
       if (outcome.status === 'fulfilled') {
-        evaluatorsRun.push(evaluator.id);
-
-        const val = outcome.value as unknown;
-        let dimResults: readonly DimensionResult[];
-
-        // Support nested CompositeEvaluator which returns { results, provenance }
-        if (val && typeof val === 'object' && 'results' in val && 'provenance' in val) {
-          const compResult = val as CompositeEvaluationResult;
-          dimResults = compResult.results;
-          evaluatorsFailed.push(...compResult.provenance.evaluatorsFailed);
-          evaluatorsSkipped.push(...compResult.provenance.evaluatorsSkipped);
+        const val = outcome.value;
+        if (val.kind === 'composite') {
+          const compResult = val.res;
+          for (const runId of compResult.provenance.evaluatorsRun) {
+            evaluatorsRun.push(`${evaluator.id}/${runId}`);
+          }
+          for (const failed of compResult.provenance.evaluatorsFailed) {
+            evaluatorsFailed.push({
+              id: `${evaluator.id}/${failed.id}`,
+              reason: failed.reason,
+            });
+          }
+          for (const skipId of compResult.provenance.evaluatorsSkipped) {
+            evaluatorsSkipped.push(`${evaluator.id}/${skipId}`);
+          }
+          for (const res of compResult.results) {
+            const list = dimensionResultsMap.get(res.criterion) ?? [];
+            list.push(res);
+            dimensionResultsMap.set(res.criterion, list);
+          }
         } else {
-          dimResults = outcome.value as readonly DimensionResult[];
-        }
-
-        for (const res of dimResults) {
-          const list = dimensionResultsMap.get(res.criterion) ?? [];
-          list.push(res);
-          dimensionResultsMap.set(res.criterion, list);
+          evaluatorsRun.push(evaluator.id);
+          for (const res of val.res) {
+            const list = dimensionResultsMap.get(res.criterion) ?? [];
+            list.push(res);
+            dimensionResultsMap.set(res.criterion, list);
+          }
         }
       } else {
         const reason =
           outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
-        evaluatorsFailed.push(`${evaluator.id} (${reason})`);
+        evaluatorsFailed.push({ id: evaluator.id, reason });
       }
     }
 
+    // Deduplicate failed by id
+    const failedMap = new Map<string, FailedEvaluatorInfo>();
+    for (const f of evaluatorsFailed) {
+      if (!failedMap.has(f.id)) {
+        failedMap.set(f.id, f);
+      }
+    }
+    const uniqueFailed = Array.from(failedMap.values());
+    const failedIds = new Set(uniqueFailed.map((f) => f.id));
+
+    // Ensure a nested evaluator never appears in both evaluatorsRun and evaluatorsFailed
+    const uniqueRun = Array.from(new Set(evaluatorsRun)).filter((id) => !failedIds.has(id));
+    const uniqueSkipped = Array.from(new Set(evaluatorsSkipped));
+
     const provenance: EvaluatorProvenance = {
-      evaluatorsRun: Array.from(new Set(evaluatorsRun)),
-      evaluatorsFailed: Array.from(new Set(evaluatorsFailed)),
-      evaluatorsSkipped: Array.from(new Set(evaluatorsSkipped)),
+      evaluatorsRun: uniqueRun,
+      evaluatorsFailed: uniqueFailed,
+      evaluatorsSkipped: uniqueSkipped,
     };
 
-    if (evaluatorsRun.length === 0) {
+    if (uniqueRun.length === 0) {
       throw new EvaluationFailedError(
-        `All active evaluators failed: [${evaluatorsFailed.join(', ')}]`
+        `All active evaluators failed: [${uniqueFailed.map((f) => `${f.id} (${f.reason})`).join(', ')}]`
       );
     }
 

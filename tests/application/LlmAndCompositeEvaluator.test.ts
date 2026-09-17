@@ -308,7 +308,7 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
       const { results, provenance } = await composite.evaluate(ctx);
 
       expect(provenance.evaluatorsRun).toEqual(['deterministic']);
-      expect(provenance.evaluatorsFailed.some((f) => f.includes('timed out'))).toBe(true);
+      expect(provenance.evaluatorsFailed.some((f) => f.id === 'llm' && f.reason.includes('timed out'))).toBe(true);
 
       const report = assembler.assemble({
         attemptId: ctx.attemptId,
@@ -355,7 +355,7 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
 
       const { results, provenance } = await outerComposite.evaluate(ctx);
       expect(results).toHaveLength(8);
-      expect(provenance.evaluatorsRun).toContain('inner-composite');
+      expect(provenance.evaluatorsRun).toContain('inner-composite/deterministic');
       expect(provenance.evaluatorsRun).toContain('llm');
     });
 

@@ -3,6 +3,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // @ts-ignore
+  test: {
+    exclude: ['**/.kilo/**', '**/node_modules/**', '**/dist/**'],
+  },
   server: {
     port: 5173,
     proxy: {

@@ -16,14 +16,13 @@ export interface CompositeEvaluationResult {
   readonly provenance: EvaluatorProvenance;
 }
 
-export type EvaluatorOutput = readonly DimensionResult[] | CompositeEvaluationResult;
-
 /**
  * Strategy interface for evaluation engines.
- * Leaf evaluators return DimensionResult[]; composite evaluators return { results, provenance }.
+ * Leaf evaluators return readonly DimensionResult[].
  */
 export interface Evaluator {
   readonly id: string;
   supports(ctx: EvaluationContext): boolean;
-  evaluate(ctx: EvaluationContext): Promise<EvaluatorOutput>;
+  evaluate(ctx: EvaluationContext): Promise<readonly DimensionResult[]>;
 }
+

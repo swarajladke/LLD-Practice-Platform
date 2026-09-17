@@ -36,7 +36,7 @@ interface EvaluationReport {
   attemptId: string;
   rubricVersion: string;
   evaluatorsRun: string[];
-  evaluatorsFailed: string[];
+  evaluatorsFailed: Array<{ id: string; reason: string }>;
   evaluatorsSkipped: string[];
   dimensionsMissing: string[];
   overallScoreComparable: boolean;
@@ -405,7 +405,7 @@ export function App() {
                       <strong style={{ color: 'var(--warning)', fontSize: '0.85rem' }}>Degraded Evaluation Notice:</strong>
                       <p style={{ fontSize: '0.82rem', color: '#fde68a', marginTop: '2px' }}>
                         Partial report generated via deterministic heuristics. Failed/skipped evaluators: [
-                        {report.evaluatorsFailed.concat(report.evaluatorsSkipped).join(', ')}].
+                        {report.evaluatorsFailed.map((f) => f.id).concat(report.evaluatorsSkipped).join(', ')}].
                       </p>
                     </div>
                   )}

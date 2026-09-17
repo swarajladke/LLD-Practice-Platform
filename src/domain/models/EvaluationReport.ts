@@ -1,9 +1,14 @@
 import type { DimensionResult } from './DimensionResult.js';
 import type { RubricDimension } from './Rubric.js';
 
+export interface FailedEvaluatorInfo {
+  readonly id: string;
+  readonly reason: string;
+}
+
 export interface EvaluatorProvenance {
   readonly evaluatorsRun: readonly string[];
-  readonly evaluatorsFailed: readonly string[];
+  readonly evaluatorsFailed: readonly FailedEvaluatorInfo[];
   readonly evaluatorsSkipped: readonly string[];
 }
 
@@ -15,7 +20,7 @@ export interface EvaluationReport {
   readonly attemptId: string;
   readonly rubricVersion: string;
   readonly evaluatorsRun: readonly string[];
-  readonly evaluatorsFailed: readonly string[];
+  readonly evaluatorsFailed: readonly FailedEvaluatorInfo[];
   readonly evaluatorsSkipped: readonly string[];
   readonly dimensionsMissing: readonly RubricDimension[];
   readonly overallScoreComparable: boolean;

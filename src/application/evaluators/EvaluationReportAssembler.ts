@@ -55,7 +55,9 @@ export class EvaluationReportAssembler {
         `Evaluators executed: [${provenance.evaluatorsRun.join(', ')}].`,
       ];
       if (provenance.evaluatorsFailed.length > 0) {
-        parts.push(`Failed: [${provenance.evaluatorsFailed.join(', ')}].`);
+        parts.push(
+          `Failed: [${provenance.evaluatorsFailed.map((f) => `${f.id} (${f.reason})`).join(', ')}].`
+        );
       }
       if (provenance.evaluatorsSkipped.length > 0) {
         parts.push(`Skipped: [${provenance.evaluatorsSkipped.join(', ')}].`);

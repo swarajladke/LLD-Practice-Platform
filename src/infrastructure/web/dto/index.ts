@@ -1,6 +1,6 @@
 import type { Problem } from '../../../domain/models/Problem.js';
 import type { Attempt } from '../../../domain/models/Attempt.js';
-import type { EvaluationReport } from '../../../domain/models/EvaluationReport.js';
+import type { EvaluationReport, FailedEvaluatorInfo } from '../../../domain/models/EvaluationReport.js';
 
 export interface ProblemDto {
   readonly id: string;
@@ -52,7 +52,7 @@ export interface ReportDto {
   readonly attemptId: string;
   readonly rubricVersion: string;
   readonly evaluatorsRun: readonly string[];
-  readonly evaluatorsFailed: readonly string[];
+  readonly evaluatorsFailed: readonly FailedEvaluatorInfo[];
   readonly evaluatorsSkipped: readonly string[];
   readonly dimensionsMissing: readonly string[];
   readonly overallScoreComparable: boolean;

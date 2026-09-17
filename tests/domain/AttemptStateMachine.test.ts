@@ -117,7 +117,7 @@ describe('Attempt State Machine & Invariants', () => {
     const degradedReport: EvaluationReport = {
       ...sampleReport,
       degraded: true,
-      evaluatorsFailed: ['llm'],
+      evaluatorsFailed: [{ id: 'llm', reason: 'Timeout' }],
     };
 
     expect(() => attempt.completeWith(degradedReport)).toThrow(

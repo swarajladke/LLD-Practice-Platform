@@ -32,7 +32,7 @@ src/web/            ➔ React + Vite client (practice UI, polling indicator, del
 Every abstraction in the system serves a specific, documented architectural purpose:
 - **`SubmissionFormat` (Factory Pattern)**: Normalizes arbitrary input formats into canonical `DesignSpec` so evaluators remain completely decoupled from submission mechanics (solves Change Test A).
 - **`Evaluator` (Strategy Pattern)**: Enables pluggable, independent evaluation strategies that operate concurrently on the canonical spec (solves Change Test B).
-- **`CompositeEvaluator` (Composite Pattern)**: Combines multiple evaluator strategies, merges dimensions via confidence weighting, and degrades gracefully when a member fails.
+- **`CompositeEvaluator` (Orchestration Pattern)**: An application orchestration type (rather than an `Evaluator` implementation) that coordinates multiple evaluator strategies, merges dimensions via confidence weighting, namespaces child provenance, and degrades gracefully when a member fails.
 - **`AttemptRepository` (Repository Pattern)**: Isolates domain aggregates from persistence mechanics, enabling SQLite in production and in-memory stores in unit tests.
 - **`Clock` (Service Pattern)**: Injects deterministic time control across aggregates and report assemblers, eliminating race conditions in timeout tests.
 
@@ -98,7 +98,7 @@ classDiagram
         +string attemptId
         +string rubricVersion
         +string[] evaluatorsRun
-        +string[] evaluatorsFailed
+        +FailedEvaluatorInfo[] evaluatorsFailed
         +string[] evaluatorsSkipped
         +RubricDimension[] dimensionsMissing
         +boolean overallScoreComparable
@@ -127,7 +127,6 @@ classDiagram
     }
 
     class CompositeEvaluator {
-        +id: "composite"
         +evaluate(ctx)
     }
 
@@ -143,7 +142,7 @@ classDiagram
 
     Evaluator <|.. DeterministicEvaluator
     Evaluator <|.. LlmEvaluator
-    Evaluator <|.. CompositeEvaluator
+    CompositeEvaluator o-- Evaluator : orchestrates
     Attempt --> DesignSpec
     Attempt --> EvaluationReport
     EvaluationReport --> DimensionResult
@@ -283,6 +282,9 @@ stateDiagram-v2
 3. **Substring & Stemming-Based Concept Coverage**:
    - *Current Limitation*: Syntactic tokenization and plural stripping can produce false positives (e.g. "spotlight" matching "spot") or false negatives for novel synonyms.
    - *Next Step*: Supplement stemming with a lightweight local embedding similarity check or WordNet synset matching for domain synonyms.
+4. **Promise Abandonment Without Request Cancellation**:
+   - *Current Limitation*: The per-evaluator timeout abandons the promise race but does not cancel the in-flight LLM HTTP request (no `AbortController` signal is propagated down to the client).
+   - *Next Step*: Thread an `AbortSignal` through `EvaluationContext` into the LLM client adapter so abandoned requests abort upstream sockets immediately.
 
 ---
 
