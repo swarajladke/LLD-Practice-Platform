@@ -1,8 +1,10 @@
-flowchart LR
-    A["Choose Problem"] --> B["Inspect Context & Rubric"]
-    B --> C["Author Structured Spec"]
-    C --> D["Submit (Async 201)"]
-    D --> E["Poll Status (202)"]
-    E --> F["Review Grounded Report (200)"]
-    F --> G["Inspect History & Deltas"]
-    G --> H["Address Recurring Weaknesses"]
+flowchart TD
+    subgraph S1 ["1. Problem Selection & Authoring"]
+        direction LR
+        A["Choose Problem"] --> B["Inspect Context & Rubric"] --> C["Author Structured Spec"] --> D["Submit (Async 201)"]
+    end
+    subgraph S2 ["2. Hybrid Evaluation & Learning Loop"]
+        direction LR
+        E["Poll Status (202)"] --> F["Review Grounded Report (200)"] --> G["Inspect History & Deltas"] --> H["Address Recurring Weaknesses"]
+    end
+    D --> E

@@ -33,3 +33,14 @@ DSA practice has a tight loop: read, code, run tests, instant verdict. LLD has n
 - **Hybrid evaluation**: zero-cost deterministic heuristics plus a temperature-0, Zod-validated LLM evaluator, merged by confidence weighting with full finding provenance.
 - **Honest citations**: every finding carries a path into the learner's submission, or an explicit absence notice. No fabricated quotes.
 - **Longitudinal loop**: per-dimension deltas between attempts plus cross-problem recurring-weakness aggregation.
+
+## 5. Sources
+1. **Hello Interview — LLD course**: https://www.hellointerview.com/learn/low-level-design/in-a-hurry/introduction  
+   **Hello Interview — LLD Guided Practice (9 problems)**: https://www.hellointerview.com/practice/low-level-design  
+2. **algomaster.io — LLD Practice**: https://algomaster.io/interview/low-level-design  
+3. **Low Level Design Mastery — practice hub (43 problems)**: https://www.lowleveldesignmastery.com/playground  
+4. **LLD Problems**: https://www.lldproblems.com/  
+5. **Educative — Grokking the LLD Interview**: https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles  
+6. **AlgoExpert / SystemsExpert**: https://www.algoexpert.io/systems/product  
+7. **Exercism — mentoring model**: https://exercism.org/docs/using/feedback/mentor
+

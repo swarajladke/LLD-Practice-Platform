@@ -34,7 +34,7 @@ Every abstraction in the system serves a specific, documented architectural purp
 
 ---
 
-## 3. Mermaid Class Diagram
+## 3. Class Diagram
 
 ![Mermaid Class Diagram](assets/class-diagram.png)
 
@@ -58,8 +58,11 @@ Every abstraction in the system serves a specific, documented architectural purp
 When both `DeterministicEvaluator` and `LlmEvaluator` evaluate the same rubric dimension, the system resolves discrepancies using the following policy:
 
 - **Chosen Policy: Confidence-Weighted Averaging**:
-  Each candidate score (on the Zod-enforced 0..5 scale) is weighted by $\max(0.1, \text{confidence}_i)$:
-  $$\text{Score}_{\text{merged}} = \frac{\sum (\text{score}_i \times \max(0.1, \text{confidence}_i))}{\sum \max(0.1, \text{confidence}_i)}$$
+  Each candidate score (on the Zod-enforced 0..5 scale) is weighted by `weight_i = max(0.1, confidence_i)`:
+  ```
+  weight_i     = max(0.1, confidence_i)
+  merged_score = sum(score_i * weight_i) / sum(weight_i)
+  ```
   All findings from both evaluators are aggregated into the dimension's `findings` array, preserving their originating `evaluatorId` and `EvidenceRef` citations.
 
 - **Concrete Failure Mode**:
@@ -67,7 +70,9 @@ When both `DeterministicEvaluator` and `LlmEvaluator` evaluate the same rubric d
   - `DeterministicEvaluator` flags a 9-method God class: score **2.0** at confidence **1.0** (weight = 1.0).
   - `LlmEvaluator` takes a generous view of the entity's high-level role: score **4.5** at confidence **0.8** (weight = 0.8).
   - The weighted average produces **3.1**:
-    $$\text{Score}_{\text{merged}} = \frac{(2.0 \times 1.0) + (4.5 \times 0.8)}{1.0 + 0.8} = \frac{2.0 + 3.6}{1.8} = \frac{5.6}{1.8} \approx 3.1$$
+    ```
+    merged_score = (2.0*1.0 + 4.5*0.8) / (1.0 + 0.8) = 5.6 / 1.8 = 3.1
+    ```
   - **Why 3.1 is unhelpful to the learner**: A score of 3.1 sits in an uninformative, lukewarm middle ground. It dilutes the severe, actionable diagnostic signal of the concrete structural violation (a 2.0 God class that would fail an LLD interview) while simultaneously penalizing the learner's otherwise sound conceptual design that the LLM rated 4.5. Instead of learning that they have an isolated, critical structural issue to fix, the learner receives an ambiguous passing grade suggesting mediocrity across the board.
 
 - **Rejected Alternative: Authority Partitioning**:

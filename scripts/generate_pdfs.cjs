@@ -8,7 +8,7 @@ function countPdfPages(pdfBuffer) {
   return matches ? matches.length : 0;
 }
 
-const commonCss = `
+const baseCss = `
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     color: #1f2328;
@@ -43,12 +43,17 @@ const commonCss = `
   li {
     margin-bottom: 2px;
   }
+  tr, li {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   table {
     border-collapse: collapse;
     width: 100%;
     margin: 8px 0;
     font-size: 8pt;
     line-height: 1.3;
+    page-break-inside: auto;
   }
   th, td {
     border: 1px solid #d0d7de;
@@ -78,16 +83,13 @@ const commonCss = `
     border-radius: 4px;
     padding: 8px 10px;
     overflow-x: auto;
+    margin: 6px 0;
   }
   img {
-    max-width: 95%;
-    max-height: 480px;
-    object-fit: contain;
+    max-width: 100%;
+    height: auto;
     display: block;
-    margin: 12px auto;
-    border: 1px solid #d0d7de;
-    border-radius: 4px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    margin: 10px auto;
   }
 `;
 
@@ -133,15 +135,15 @@ async function main() {
         h1 {
           font-size: 15pt;
           margin-top: 0;
-          margin-bottom: 6px;
+          margin-bottom: 5px;
           border-bottom: 1.5px solid #0969da;
-          padding-bottom: 3px;
+          padding-bottom: 2px;
           color: #0969da;
         }
         h2 {
           font-size: 10.5pt;
-          margin-top: 8px;
-          margin-bottom: 4px;
+          margin-top: 7px;
+          margin-bottom: 3px;
           color: #1f2328;
           border-bottom: 1px solid #eaeef2;
           padding-bottom: 2px;
@@ -153,16 +155,21 @@ async function main() {
         li {
           margin-bottom: 2px;
         }
+        tr, li {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
         table {
           border-collapse: collapse;
           width: 100%;
-          margin: 5px 0;
-          font-size: 7.8pt;
+          margin: 4px 0;
+          font-size: 7.6pt;
           line-height: 1.25;
+          page-break-inside: auto;
         }
         th, td {
           border: 1px solid #d0d7de;
-          padding: 4px 6px;
+          padding: 4px 5px;
           text-align: left;
           vertical-align: top;
         }
@@ -179,6 +186,9 @@ async function main() {
           color: #57606a;
           font-size: 7.8pt;
         }
+        ol {
+          padding-left: 18px;
+        }
       `,
     }
   );
@@ -194,14 +204,32 @@ async function main() {
   console.log(`Saved Research Note: ${resPages} pages, ${resBuf.length} bytes`);
 
   // ==========================================
-  // 2. Design Note (A4 portrait, rendered Mermaid diagrams)
+  // 2. Design Note (A4 portrait, dedicated landscape page for Class Diagram)
   // ==========================================
   console.log('--- Generating Design Note PDF ---');
-  const designPath = path.resolve(rootDir, 'docs/DESIGN.md');
+  let designMd = fs.readFileSync(path.resolve(rootDir, 'docs/DESIGN.md'), 'utf-8');
+
+  // Wrap Section 3 in a landscape container for the PDF
+  const section3Regex = /(## 3\. Class Diagram[\s\S]*?!\[.*?\]\(assets\/class-diagram\.png\))/;
+  designMd = designMd.replace(
+    section3Regex,
+    '<div class="class-diagram-landscape-page">\n\n$1\n\n</div>'
+  );
+
+  const processedDesignPath = path.resolve(scratchDir, 'DESIGN_PROCESSED.md');
+  fs.writeFileSync(processedDesignPath, designMd, 'utf-8');
+
+  // Copy assets next to processed markdown so relative image paths work seamlessly
+  const scratchAssetsDir = path.resolve(scratchDir, 'assets');
+  if (!fs.existsSync(scratchAssetsDir)) fs.mkdirSync(scratchAssetsDir, { recursive: true });
+  fs.copyFileSync(path.resolve(rootDir, 'docs/assets/user-flow.png'), path.resolve(scratchAssetsDir, 'user-flow.png'));
+  fs.copyFileSync(path.resolve(rootDir, 'docs/assets/class-diagram.png'), path.resolve(scratchAssetsDir, 'class-diagram.png'));
+  fs.copyFileSync(path.resolve(rootDir, 'docs/assets/state-machine.png'), path.resolve(scratchAssetsDir, 'state-machine.png'));
+
   const designDest = path.resolve(submissionDir, 'Design_Note_Swaraj_Ladke.pdf');
 
   await mdToPdf(
-    { path: designPath },
+    { path: processedDesignPath },
     {
       dest: designDest,
       pdf_options: {
@@ -215,7 +243,58 @@ async function main() {
         },
         printBackground: true,
       },
-      css: commonCss,
+      css: `
+        ${baseCss}
+
+        @page landscape-section {
+          size: A4 landscape;
+          margin: 10mm;
+        }
+
+        .class-diagram-landscape-page {
+          page: landscape-section;
+          break-before: page;
+          break-after: page;
+          page-break-before: always;
+          page-break-after: always;
+          text-align: center;
+        }
+
+        .class-diagram-landscape-page h2 {
+          text-align: left;
+          margin-bottom: 8px;
+        }
+
+        .class-diagram-landscape-page img {
+          width: 100%;
+          max-width: 100%;
+          max-height: 172mm;
+          object-fit: contain;
+          margin: 0 auto;
+          border: 1px solid #d0d7de;
+          border-radius: 4px;
+        }
+
+        /* Portrait user flow image */
+        img[src*="user-flow.png"] {
+          max-width: 90%;
+          max-height: 140px;
+          object-fit: contain;
+          margin: 8px auto;
+          border: 1px solid #d0d7de;
+          border-radius: 4px;
+        }
+
+        /* Portrait state machine image */
+        img[src*="state-machine.png"] {
+          max-width: 70%;
+          max-height: 260px;
+          object-fit: contain;
+          margin: 8px auto;
+          border: 1px solid #d0d7de;
+          border-radius: 4px;
+        }
+      `,
     }
   );
 
@@ -258,7 +337,7 @@ async function main() {
         },
         printBackground: true,
       },
-      css: commonCss,
+      css: baseCss,
     }
   );
 

@@ -42,7 +42,10 @@ This document records the collaborative pairing process between the engineer and
   - LLMs frequently suffer from sycophancy or overlook concrete syntactic violations (e.g. an entity having 8 methods or missing from relationships). Overwriting deterministic heuristics throws away objective, zero-cost truth.
   - Conversely, averaging bare numbers without context hides *why* a score was lowered.
   - **Adopted Solution**: We implemented **Confidence-Weighted Merging**:
-    $$\text{weight}_i = \max(0.1, \text{confidence}_i), \quad \text{Score} = \frac{\sum (\text{score}_i \times \text{weight}_i)}{\sum \text{weight}_i}$$
+    ```
+    weight_i     = max(0.1, confidence_i)
+    merged_score = sum(score_i * weight_i) / sum(weight_i)
+    ```
     Each finding retains its originating `evaluatorId` and cited `EvidenceRef`. The final report combines findings from both evaluators, giving the learner an un-diluted view of both structural violations and nuanced architectural feedback.
 
 ---

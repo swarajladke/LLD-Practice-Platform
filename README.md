@@ -132,7 +132,7 @@ Follow this step-by-step click-through to evaluate the platform end-to-end:
 
 4. **Inspect the Evaluation Report**:
    - Once evaluation completes, the server returns `200 OK` with the full `EvaluationReport`.
-   - Review the **Overall Score** (0-10) and the **Evaluator Provenance** badges (`deterministic: completed`, `llm: completed`).
+   - Review the **Overall Score** (0.0-5.0) and the **Evaluator Provenance** badges (`deterministic: completed`, `llm: completed`).
    - Expand the **Dimension Breakdown** to see scores across all 8 rubric criteria:
      - Requirement Understanding
      - Class Responsibilities
