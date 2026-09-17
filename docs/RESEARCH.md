@@ -59,12 +59,11 @@ Our platform addresses these gaps with a focused, minimal architecture:
 
 ## 5. Source URLs & References
 
-- **Hello Interview (Low-Level Design Track)**: [https://www.hellointerview.com/learn/system-design/in-a-hurry/low-level-design](https://www.hellointerview.com/learn/system-design/in-a-hurry/low-level-design)
-- **Algomaster.io**: [https://algomaster.io](https://algomaster.io)
-- **Low Level Design Mastery**: [https://lowleveldesign.io](https://lowleveldesign.io)
-- **LLDProblems.com**: [https://lldproblems.com](https://lldproblems.com)
-- **Educative (Grokking OOD)**: [https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles](https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles)
-- **AlgoExpert / SystemsExpert**: [https://www.algoexpert.io/systems/product](https://www.algoexpert.io/systems/product)
-- **Exercism**: [https://exercism.org](https://exercism.org)
-- **LeetCode**: [https://leetcode.com](https://leetcode.com)
-- **ByteByteGo**: [https://bytebytego.com](https://bytebytego.com)
+- Hello Interview — LLD course: https://www.hellointerview.com/learn/low-level-design/in-a-hurry/introduction
+- Hello Interview — LLD Guided Practice (9 problems): https://www.hellointerview.com/practice/low-level-design
+- algomaster.io — LLD Practice: https://algomaster.io/interview/low-level-design
+- Low Level Design Mastery — practice hub (43 problems): https://www.lowleveldesignmastery.com/playground
+- LLD Problems: https://www.lldproblems.com/
+- Educative — Grokking the LLD Interview: https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles
+- AlgoExpert / SystemsExpert: https://www.algoexpert.io/systems/product
+- Exercism — mentoring model: https://exercism.org/docs/using/feedback/mentor
