@@ -1,6 +1,8 @@
 # LLD Practice Platform
 
-A focused, deliberate practice platform for Low-Level Design (LLD) and Object-Oriented Design (OOD). Learners choose a system design problem, author a structured design specification, receive grounded hybrid feedback from deterministic heuristics and LLM evaluation, review score deltas over time, and systematically eliminate recurring architectural anti-patterns.
+A focused, deliberate practice platform for Low-Level Design (LLD) and Object-Oriented Design (OOD). While AI feedback on LLD now exists (Hello Interview, algomaster.io, Low Level Design Mastery, lldproblems.com), it is per-session, ungrounded in the learner's own text, not pinned to a versioned rubric, and not aggregated across problems.
+
+LLD Practice Platform solves this: learners choose a system design problem, author a structured design specification, receive grounded hybrid feedback with line-level citations from deterministic heuristics and LLM evaluation, review score deltas over time, and systematically eliminate recurring architectural anti-patterns.
 
 ---
 

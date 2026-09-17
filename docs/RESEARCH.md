@@ -11,12 +11,15 @@ Low-Level Design (LLD) and Object-Oriented Design (OOD) interview preparation is
 In LLD, however, learners face fundamental obstacles:
 - **No Single "Correct" Answer**: System designs inherently balance tradeoffs (e.g., extensibility vs. simplicity, in-memory vs. database, inheritance vs. composition).
 - **The "Blank Page" Paralysis**: Learners often jump straight into drawing massive class diagrams or writing thousands of lines of boilerplate code without isolating core responsibilities and invariants.
-- **Unexplainable / Vague Feedback**: Existing preparation relies either on static book chapters or prompting generic LLMs with "Review my code", which results in flattering, non-deterministic scores lacking concrete citations.
+- **Ungrounded / Ephemeral Feedback**: AI feedback on LLD now exists (Hello Interview, algomaster.io, Low Level Design Mastery, lldproblems.com), but it is per-session, ungrounded in the learner's own text, not pinned to a versioned rubric, and not aggregated across problems.
 - **Lack of Longitudinal Tracking**: Learners do not know if their architectural habits (e.g. God classes, anemic domain models, missing abstractions) are improving across problem attempts.
 
 ---
 
 ## 2. Competitive Landscape & Comparison Table
+
+> [!NOTE]
+> Competitor analysis rows for Hello Interview, algomaster.io, Low Level Design Mastery, and lldproblems.com are based on publicly available marketing, documentation, and free-tier pages, because premium feedback internals are paywalled.
 
 The following comparison matrix evaluates real-world tools and common learner workflows across five dimensions:
 
@@ -27,8 +30,9 @@ The following comparison matrix evaluates real-world tools and common learner wo
 | **ByteByteGo / High-Level Design Platforms** | | | | | |
 | **Exercism / Mentorship Platforms** | | | | | |
 | **Generic "Ask ChatGPT" Workflow** | | | | | |
-| **Low Level Design Mastery** | | | | | |
 | **Hello Interview (Low-Level Design Track)** | | | | | |
+| **Algomaster.io** | | | | | |
+| **Low Level Design Mastery / LLDProblems.com** | | | | | |
 
 ---
 
@@ -61,3 +65,16 @@ Our platform addresses these gaps with a focused, minimal architecture:
 - **Hybrid Evaluation Engine**: Combines zero-cost deterministic rule heuristics (god classes, orphan entities, anemic models, uncovered extension axes) with an evidence-grounded LLM evaluator operating under strict temperature 0 and Zod validation.
 - **Explainable Feedback**: Every finding carries an honest citation (`EvidenceRef`) linking directly to the learner's JSON path or explicitly noting the absence of an expected requirement.
 - **Continuous Learning Loop**: Per-attempt dimension deltas comparing consecutive submissions, coupled with an aggregated "Recurring Weaknesses" analyzer that surfaces persistent architectural anti-patterns across multiple practice sessions.
+
+---
+
+## 5. Source URLs & References
+
+- **LeetCode**: [https://leetcode.com](https://leetcode.com)
+- **Educative (Grokking OOD)**: [https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles](https://www.educative.io/courses/grokking-the-low-level-design-interview-using-ood-principles)
+- **ByteByteGo**: [https://bytebytego.com](https://bytebytego.com)
+- **Exercism**: [https://exercism.org](https://exercism.org)
+- **Hello Interview (Low-Level Design Track)**: [https://www.hellointerview.com/learn/system-design/in-a-hurry/low-level-design](https://www.hellointerview.com/learn/system-design/in-a-hurry/low-level-design)
+- **Algomaster.io**: [https://algomaster.io](https://algomaster.io)
+- **Low Level Design Mastery**: [https://lowleveldesign.io](https://lowleveldesign.io)
+- **LLDProblems.com**: [https://lldproblems.com](https://lldproblems.com)

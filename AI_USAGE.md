@@ -13,8 +13,9 @@ This document records the collaborative pairing process between the engineer and
 | **3** | **Evaluation Concurrency** | Deploy BullMQ or RabbitMQ with Redis distributed queue | **REJECTED** | Explicitly out-of-scope for 2-day monolith. Monolith in-process async with startup stale recovery sweep achieved resilience without external infra. |
 | **4** | **Evidence Representation** | Introduce `EvidenceRef` discriminated union (`quote` vs `absence`) | **ACCEPTED** | Replaced fabricated quote strings like `Evidence.create('entities: []')` with honest absence notices. |
 | **5** | **Heuristic Finding Collection** | Accumulate all findings per dimension and calculate score via `deriveScoreFromFindings` | **ACCEPTED** | Replaced early-exit heuristics with exhaustive feedback across all checks within a dimension. |
-| **6** | **Evaluator Concurrency State** | Store execution state (`evaluatorsRun`, etc.) as instance variables on `CompositeEvaluator` | **PASSED TESTS, CAUGHT IN REVIEW** | Passed all 59 sequential tests; caught in review because concurrent runs on a shared instance cross-contaminate provenance. Refactored to pure stateless execution. |
+| **6** | **Evaluator Concurrency State** | Store execution state (`evaluatorsRun`, etc.) as instance variables on `CompositeEvaluator` | **PASSED TESTS, CAUGHT IN REVIEW** | Passed all sequential tests (64 tests across 8 suites); caught in review because concurrent runs on a shared instance cross-contaminate provenance. Refactored to pure stateless execution. |
 | **7** | **DTO & Information Hiding** | Serialize domain models directly or place `toDto()` methods on domain entities | **PASSED TESTS, CAUGHT IN REVIEW** | Passed functional tests, but leaked rubric internals (`expectedConcepts`, `godClassMethodThreshold`) to the API. Refactored to an explicit DTO layer with redaction. |
+| **8** | **Competitive Research Positioning** | AI initially framed positioning as "no structured LLD feedback exists" | **REJECTED** | Factually incorrect; research revealed four platforms shipping AI feedback. Positioning narrowed to grounding citations, rubric versioning, and cross-attempt aggregation. |
 
 ---
 
@@ -98,7 +99,7 @@ This document records the collaborative pairing process between the engineer and
   }
   ```
 - **Why Existing Tests Missed It**:
-  - The test suite had 59 unit tests. Every single test executed evaluations sequentially on a freshly instantiated `CompositeEvaluator`. Because no test ran evaluations concurrently on the same instance, all 59 tests passed green with zero errors.
+  - The test suite had 64 unit tests across 8 suites. Every single test executed evaluations sequentially on a freshly instantiated `CompositeEvaluator`. Because no test ran evaluations concurrently on the same instance, all tests passed green with zero errors.
 - **Review Finding & Resolution**:
   - In a real Node.js web server, `CompositeEvaluator` is instantiated as a singleton shared across concurrent HTTP requests.
   - If two learners submit designs concurrently, their evaluations share the instance. If learner A's LLM call fails while learner B's succeeds, `this.evaluatorsFailed` is mutated in place, causing learner B's report to be falsely marked as `degraded: true`!
@@ -108,7 +109,7 @@ This document records the collaborative pairing process between the engineer and
       readonly results: readonly DimensionResult[];
       readonly provenance: {
         readonly evaluatorsRun: readonly string[];
-        readonly evaluatorsFailed: readonly string[];
+        readonly evaluatorsFailed: readonly FailedEvaluatorInfo[];
         readonly evaluatorsSkipped: readonly string[];
       };
     }
@@ -128,6 +129,17 @@ This document records the collaborative pairing process between the engineer and
   - Furthermore, having `toDto()` on domain models coupled the domain layer to HTTP wire representations.
   - **Fix**: Created an explicit DTO mapping layer in `src/infrastructure/web/dto/index.ts`. `ProblemDto` exposes public requirements, clarifying context, and extension axes, while completely omitting all internal rubric thresholds and concept keywords.
   - Added an integration test in `tests/web/ApiEndpoints.test.ts` asserting that `GET /api/problems/:id` contains none of the rubric internal keys.
+
+---
+
+### 8. Competitive Research: AI-Gathered, Human-Filtered
+- **Context**: Mapping the competitive landscape of existing Low-Level Design preparation platforms to position our product.
+- **AI Proposal & Initial Framing**: The AI ran the initial web research and drafted the competitive comparison table and market gap analysis. It initially framed the product positioning around the premise that "no automated or structured LLD feedback exists in the market."
+- **Review Finding & Human Verification**:
+  - The human engineer verified the research rows against available public marketing and free-tier pages. (Note: Premium feedback internals for Hello Interview, algomaster.io, Low Level Design Mastery, and lldproblems.com are behind paywalls and explicitly marked as unverified in `docs/RESEARCH.md`).
+  - The AI's initial framing ("no structured LLD feedback exists") was **REJECTED** as factually wrong after the research surfaced that four active competitors are already shipping automated or LLM-driven LLD feedback experiences.
+- **Decision & Refined Positioning**:
+  - The positioning was narrowed to what actually differentiates the platform: AI feedback on LLD now exists, but it is per-session, ungrounded in the learner's own text with line citations, not pinned to a versioned rubric, and not aggregated across problems into a longitudinal learning loop.
 
 ---
 
