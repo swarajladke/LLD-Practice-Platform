@@ -166,6 +166,24 @@ classDiagram
 | **edgeCasesTestability** | Deterministic + LLM | Guard for non-empty `assumptions` and boundary constraints. LLM reviews failure modes. | `assumptions[i]` or `absenceRef("assumptions")` |
 | **explanationQuality** | Deterministic + LLM | Guard for `minTradeoffs` count and `minRationaleLength`. LLM assesses technical trade-off depth. | `tradeoffs[i].why` or `absenceRef("tradeoffs")` |
 
+### When Evaluators Disagree
+
+When both `DeterministicEvaluator` and `LlmEvaluator` evaluate the same rubric dimension, the system resolves discrepancies using the following policy:
+
+- **Chosen Policy: Confidence-Weighted Averaging**:
+  Each candidate score is weighted by $\max(0.1, \text{confidence}_i)$:
+  $$\text{Score}_{\text{merged}} = \frac{\sum (\text{score}_i \times \max(0.1, \text{confidence}_i))}{\sum \max(0.1, \text{confidence}_i)}$$
+  All findings from both evaluators are aggregated into the dimension's `findings` array, preserving their originating `evaluatorId` and `EvidenceRef` citations.
+
+- **Concrete Failure Mode**:
+  A confidence-1.0 deterministic violation (e.g. God class detected with 9 methods, scoring 3.0) averaged with a generous LLM score (e.g. scoring 8.5 at confidence 0.8) yields a middling score of ~5.4. This score represents neither evaluator: it obscures the severity of the concrete structural violation while blunting the positive aspects noted by the LLM.
+
+- **Rejected Alternative: Authority Partitioning**:
+  We considered making the deterministic engine strictly authoritative for structural dimensions (`classResponsibilities`, `couplingCohesion`, `encapsulationInterfaces`, `abstractionPatterns`) and the LLM authoritative solely for qualitative judgment dimensions (`requirementUnderstanding`, `extensibility`, `edgeCasesTestability`, `explanationQuality`).
+  
+- **Reason for Rejection**:
+  Strict authority partitioning silences qualitative LLM insights on structural design. For example, an LLM can recognize when an apparent "God class" is legitimately aggregating cohesive domain behaviors or suggest a specific design pattern (e.g., State or Strategy) to resolve it. Rather than discarding one evaluator's perspective, confidence-weighted averaging retains full visibility of all findings, ensuring the learner sees the high-confidence deterministic violation alongside the LLM's actionable architectural suggestions.
+
 ---
 
 ## 5. The Two Change Tests

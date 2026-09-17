@@ -52,6 +52,14 @@ const app = createApp({
   learningLoopService,
 });
 
+void evaluationService.recoverStaleEvaluations().then((count) => {
+  if (count > 0) {
+    console.log(`Recovered ${count} stale evaluation(s) on startup.`);
+  }
+}).catch((err) => {
+  console.error('Failed to run startup stale-evaluation sweep:', err);
+});
+
 app.listen(PORT, () => {
   console.log(`LLD Practice Platform Backend running on http://localhost:${PORT}`);
 });

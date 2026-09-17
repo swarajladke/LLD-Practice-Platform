@@ -5,6 +5,7 @@ import { CompositeEvaluator } from '../../src/application/evaluators/CompositeEv
 import { EvaluationReportAssembler } from '../../src/application/evaluators/EvaluationReportAssembler.js';
 import { FakeLlmClient } from '../../src/infrastructure/llm/FakeLlmClient.js';
 import { FixedClock } from '../../src/domain/services/Clock.js';
+import { Evidence } from '../../src/domain/models/Evidence.js';
 import { Rubric, type RubricDimension } from '../../src/domain/models/Rubric.js';
 import { EvaluationFailedError } from '../../src/domain/errors/DomainErrors.js';
 import type { Problem } from '../../src/domain/models/Problem.js';
@@ -128,7 +129,7 @@ describe('LlmEvaluator & CompositeEvaluator Integration', () => {
                 {
                   evidenceRef: {
                     kind: 'quote' as const,
-                    evidence: { quote: 'parkVehicle', sourcePath: 'entities[0].methods[0]' },
+                    evidence: Evidence.create('parkVehicle', 'entities[0].methods[0]'),
                   },
                   concern: 'Minor coupling',
                   suggestion: 'Extract strategy',

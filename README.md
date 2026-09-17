@@ -125,8 +125,8 @@ Follow this step-by-step click-through to evaluate the platform end-to-end:
 3. **Submit Attempt**:
    - Click **Submit Design for Evaluation**.
    - The UI generates a unique idempotency key and dispatches `POST /api/attempts`.
-   - The backend responds with `201 Accepted` and enqueues evaluation asynchronously.
-   - The UI enters the polling state (`202 Accepted` while status is `EVALUATING`).
+   - The backend responds with `201 Created` and enqueues evaluation asynchronously.
+   - The UI polls `GET /api/attempts/:id` for lifecycle status (`SUBMITTED` → `EVALUATING`) and `GET /api/attempts/:id/report` (`202 Accepted` while evaluating).
 
 4. **Inspect the Evaluation Report**:
    - Once evaluation completes, the server returns `200 OK` with the full `EvaluationReport`.
