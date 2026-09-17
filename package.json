@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run",
+    "test": "tsc --noEmit && vitest run",
     "test:watch": "vitest",
     "dev:server": "tsx watch src/infrastructure/web/server.ts",
     "dev:client": "vite",

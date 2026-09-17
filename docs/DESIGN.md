@@ -148,41 +148,45 @@ classDiagram
     Attempt --> EvaluationReport
     EvaluationReport --> DimensionResult
     DimensionResult --> Finding
-    CompositeEvaluator ..> EvaluationReportAssembler
 ```
 
 ---
 
 ## 4. Evaluation Strategy: Deterministic vs. LLM Split
 
-| Rubric Dimension | Evaluated By | Mechanism / Heuristic | Evidence Citation (`sourcePath`) |
+| Rubric Dimension | Evaluated By & Role | Mechanism / Heuristic | Evidence Citation (`sourcePath`) |
 | :--- | :--- | :--- | :--- |
-| **requirementUnderstanding** | Deterministic + LLM | Tokenized concept coverage matching `rubric.expectedConcepts` & `minEntities` guard. LLM assesses requirement depth. | `entities[i].name` or `absenceRef("expectedConcepts")` |
-| **classResponsibilities** | Deterministic + LLM | God-class check (`methods.length > threshold`) and multi-duty conjunction detector (`manages ... and processes`). LLM evaluates SRP nuances. | `entities[i].methods` or `entities[i].responsibility` |
-| **couplingCohesion** | Deterministic + LLM | Orphan entity detector (entities absent from all relationships). LLM evaluates coupling appropriateness. | `entities[i].name` or `relationships[i]` |
-| **encapsulationInterfaces** | Deterministic + LLM | Anemic domain model detector (entities with attributes but 0 methods). LLM reviews encapsulation boundaries. | `entities[i].attributes` |
-| **abstractionPatterns** | Deterministic + LLM | Missing abstraction detector for declared `rubric.extensionAxes` (checks for matching interface or hierarchy). LLM reviews pattern appropriateness. | `interfaces[i].name` or `absenceRef("interfaces")` |
-| **extensibility** | Deterministic + LLM | Minimum length check on `extensibility` narrative against `rubric.minExtensibilityLength`. LLM reviews how easily design absorbs change. | `extensibility` |
-| **edgeCasesTestability** | Deterministic + LLM | Guard for non-empty `assumptions` and boundary constraints. LLM reviews failure modes. | `assumptions[i]` or `absenceRef("assumptions")` |
-| **explanationQuality** | Deterministic + LLM | Guard for `minTradeoffs` count and `minRationaleLength`. LLM assesses technical trade-off depth. | `tradeoffs[i].why` or `absenceRef("tradeoffs")` |
+| **requirementUnderstanding** | LLM-primary / deterministic-guard | Tokenized concept coverage guard matching `rubric.expectedConcepts` & `minEntities`. LLM assesses requirement depth and domain modeling. | `entities[i].name` or `absenceRef("expectedConcepts")` |
+| **classResponsibilities** | Deterministic-primary / LLM-advisory | God-class check (`methods.length > threshold`) and multi-duty conjunction detector (`manages ... and processes`). LLM evaluates nuanced SRP boundaries. | `entities[i].methods` or `entities[i].responsibility` |
+| **couplingCohesion** | Deterministic-primary / LLM-advisory | Orphan entity detector (entities absent from all relationships). LLM evaluates coupling appropriateness. | `entities[i].name` or `relationships[i]` |
+| **encapsulationInterfaces** | Deterministic-primary / LLM-advisory | Anemic domain model detector (entities with attributes but 0 methods). LLM reviews encapsulation boundaries and method signatures. | `entities[i].attributes` |
+| **abstractionPatterns** | Deterministic-primary / LLM-advisory | Missing abstraction detector for declared `rubric.extensionAxes` (checks for matching interface or hierarchy). LLM reviews design pattern appropriateness. | `interfaces[i].name` or `absenceRef("interfaces")` |
+| **extensibility** | LLM-primary / deterministic-guard | Character length check on `extensibility` narrative against `rubric.minExtensibilityLength` (acts strictly as a presence guard, not a quality signal; note that it rewards verbosity). LLM performs primary evaluation of how cleanly the design absorbs anticipated change. | `extensibility` |
+| **edgeCasesTestability** | LLM-primary / deterministic-guard | Guard for non-empty `assumptions` and boundary constraints. LLM assesses failure modes, concurrent race conditions, and testability. | `assumptions[i]` or `absenceRef("assumptions")` |
+| **explanationQuality** | LLM-primary / deterministic-guard | Guard for `minTradeoffs` count and `minRationaleLength`. LLM assesses depth of technical reasoning and trade-off justification. | `tradeoffs[i].why` or `absenceRef("tradeoffs")` |
 
 ### When Evaluators Disagree
 
 When both `DeterministicEvaluator` and `LlmEvaluator` evaluate the same rubric dimension, the system resolves discrepancies using the following policy:
 
 - **Chosen Policy: Confidence-Weighted Averaging**:
-  Each candidate score is weighted by $\max(0.1, \text{confidence}_i)$:
+  Each candidate score (on the Zod-enforced 0..5 scale) is weighted by $\max(0.1, \text{confidence}_i)$:
   $$\text{Score}_{\text{merged}} = \frac{\sum (\text{score}_i \times \max(0.1, \text{confidence}_i))}{\sum \max(0.1, \text{confidence}_i)}$$
   All findings from both evaluators are aggregated into the dimension's `findings` array, preserving their originating `evaluatorId` and `EvidenceRef` citations.
 
 - **Concrete Failure Mode**:
-  A confidence-1.0 deterministic violation (e.g. God class detected with 9 methods, scoring 3.0) averaged with a generous LLM score (e.g. scoring 8.5 at confidence 0.8) yields a middling score of ~5.4. This score represents neither evaluator: it obscures the severity of the concrete structural violation while blunting the positive aspects noted by the LLM.
+  Consider a concrete scenario on `classResponsibilities`:
+  - `DeterministicEvaluator` flags a 9-method God class: score **2.0** at confidence **1.0** (weight = 1.0).
+  - `LlmEvaluator` takes a generous view of the entity's high-level role: score **4.5** at confidence **0.8** (weight = 0.8).
+  - The weighted average produces **3.1**:
+    $$\text{Score}_{\text{merged}} = \frac{(2.0 \times 1.0) + (4.5 \times 0.8)}{1.0 + 0.8} = \frac{2.0 + 3.6}{1.8} = \frac{5.6}{1.8} \approx 3.1$$
+  - **Why 3.1 is unhelpful to the learner**: A score of 3.1 sits in an uninformative, lukewarm middle ground. It dilutes the severe, actionable diagnostic signal of the concrete structural violation (a 2.0 God class that would fail an LLD interview) while simultaneously penalizing the learner's otherwise sound conceptual design that the LLM rated 4.5. Instead of learning that they have an isolated, critical structural issue to fix, the learner receives an ambiguous passing grade suggesting mediocrity across the board.
 
 - **Rejected Alternative: Authority Partitioning**:
   We considered making the deterministic engine strictly authoritative for structural dimensions (`classResponsibilities`, `couplingCohesion`, `encapsulationInterfaces`, `abstractionPatterns`) and the LLM authoritative solely for qualitative judgment dimensions (`requirementUnderstanding`, `extensibility`, `edgeCasesTestability`, `explanationQuality`).
   
 - **Reason for Rejection**:
-  Strict authority partitioning silences qualitative LLM insights on structural design. For example, an LLM can recognize when an apparent "God class" is legitimately aggregating cohesive domain behaviors or suggest a specific design pattern (e.g., State or Strategy) to resolve it. Rather than discarding one evaluator's perspective, confidence-weighted averaging retains full visibility of all findings, ensuring the learner sees the high-confidence deterministic violation alongside the LLM's actionable architectural suggestions.
+  Strict authority partitioning completely silences qualitative LLM insights on structural design. An LLM can recognize when an apparent "God class" is legitimately aggregating cohesive domain behaviors or suggest a specific design pattern (e.g., State or Strategy) to refactor it. Rather than discarding one evaluator's perspective, confidence-weighted averaging retains full visibility of all findings, ensuring the learner sees the high-confidence deterministic violation explicitly flagged with its citation alongside the LLM's actionable architectural suggestions.
 
 ---
 
@@ -190,13 +194,26 @@ When both `DeterministicEvaluator` and `LlmEvaluator` evaluate the same rubric d
 
 ### Change Test A: Move from Structured Text to Class Diagrams or Code
 > *Question: Today text submission; later a class diagram. How much of the domain changes?*
-- **Domain Impact**: **0%**. Zero domain code changes.
-- **How It Works**: The entire evaluation pipeline (heuristics, LLM evaluator, composite aggregation, report assembler) depends exclusively on the canonical `DesignSpec`. A class diagram parser (e.g. Mermaid or PlantUML) or AST code parser is simply implemented as a new `SubmissionFormat` (e.g. `ClassDiagramFormat : SubmissionFormat`). Once normalized to `DesignSpec`, the evaluation proceeds identically.
+- **Domain Impact**: **Partial domain impact (not 0%)**.
+- **Analysis**:
+  - Structural dimensions (`entities`, `relationships`, `interfaces`) port cleanly at zero domain cost: a class diagram parser (e.g. Mermaid or PlantUML) can be implemented as a new `SubmissionFormat` that maps diagram nodes and edges into `DesignSpec.entities`, `relationships`, and `interfaces`.
+  - However, a visual class diagram **cannot express non-structural dimensions**: learner assumptions, design trade-offs, or an extensibility narrative. 
+  - Consequently, supporting class diagrams requires one of two architectural choices:
+    1. *Make non-structural fields optional in `DesignSpec`*: Change `assumptions?: string[]`, `tradeoffs?: TradeoffDefinition[]`, `extensibility?: string`. This is a real domain change that introduces undefined guards across all evaluators.
+    2. *Introduce per-format dimension applicability in the Rubric*: Allow the `Rubric` to declare which dimensions apply to a given format (e.g. `applicableDimensions(formatId)`). Evaluators skip inapplicable dimensions, recording them in `dimensionsMissing` and marking `overallScoreComparable: false`.
+  - **Chosen Option & Rationale**: We would pick **Option 2 (Per-Format Dimension Applicability in the Rubric)**. Making domain spec fields optional pollutes the core aggregate with partial states and invites runtime null checks everywhere. Making applicability a property of the rubric/evaluation policy truthfully reflects reality: a class diagram format legitimately tests structural syntax and relationships, but leaves trade-off justification to text or interview dialogue.
 
 ### Change Test B: Adding a Rule-Based Evaluator or Human Review
 > *Question: Today one evaluator; later a rule-based evaluator or human review. Can you add it?*
-- **Domain Impact**: **0%**. Zero changes to existing evaluators or orchestration logic.
-- **How It Works**: Every evaluation engine implements `Evaluator`. Adding a human review evaluator or static linter requires implementing `HumanReviewEvaluator : Evaluator`. Registering it into `CompositeEvaluator` automatically includes its dimension results in confidence-weighted merging, records its execution in `evaluatorsRun`, and degrades gracefully if it is skipped or fails.
+- **Domain Impact**: **Zero domain cost for synchronous evaluators; real architectural extension required for asynchronous human review (not 0%)**.
+- **Analysis**:
+  - *Synchronous Evaluators (AST linters, static rule checkers)*: Fit the `Evaluator` port seamlessly at zero domain cost. Any in-process engine implementing `id`, `supports(ctx)`, and `evaluate(ctx)` can be registered into `CompositeEvaluator` without touching domain models or services.
+  - *Asynchronous Human Review Does NOT Fit the Current Port*: The current `Evaluator.evaluate()` contract returns a `Promise<EvaluatorOutput>` governed by a per-evaluator timeout (default 15 seconds) inside an automated background loop. A human mentor reviewing a design over hours or days will always breach the 15s timeout, land in `evaluatorsFailed`, and produce a permanently `degraded: true` report.
+  - **Required Extension Shape (Report Amendment Path)**:
+    Supporting human review requires introducing an asynchronous report-amendment lifecycle:
+    1. An initial evaluation completes via automated evaluators (`AttemptStatus = 'EVALUATED'`).
+    2. A new domain method `attempt.amendWith(humanDimensionResults, rubricVersion)` allows a late-arriving human review to attach or override specific dimensions on an already-evaluated attempt.
+    3. A `rubricVersion` guard ensures that if the problem's rubric was updated while the human review was pending, the amendment is rejected or flagged as non-comparable.
 
 ---
 
@@ -222,13 +239,22 @@ stateDiagram-v2
     FAILED --> [*]
 ```
 
-### Invariants Enforced
-- An attempt cannot transition from `EVALUATED` back to `EVALUATING` or `SUBMITTED`.
-- `report` is guaranteed to exist only on `EVALUATED`.
-- `errorMessage` is guaranteed to exist only on `FAILED`.
-- `completeWith()` asserts that `report.degraded === false` to guarantee no false healthy states.
-- `degradeWith()` asserts that `report.degraded === true`.
-- Attempt submissions are saved to the database **before** evaluation begins, ensuring persistence even if an evaluator or the server crashes.
+### Invariants & Lifecycle Semantics
+
+- **Idempotent Resubmissions**:
+  - When `EvaluationService.submitAttempt()` receives a submission whose `idempotencyKey` matches an existing attempt:
+    - If the `rawSubmission` payload is identical, it safely replays the existing attempt: returns HTTP `200 OK` with `{ outcome: 'accepted', attemptId: existing.id, status: existing.status, isReplay: true }` without creating a duplicate attempt or re-triggering evaluation.
+    - If the `idempotencyKey` matches but the `rawSubmission` payload differs, the service rejects the request with `IdempotencyPayloadMismatchError` (HTTP `409 Conflict`), preventing payload corruption under key reuse.
+- **State Invariants**:
+  - An attempt cannot transition from `EVALUATED` back to `EVALUATING` or `SUBMITTED`.
+  - `report` is guaranteed to exist only on `EVALUATED`.
+  - `errorMessage` is guaranteed to exist only on `FAILED`.
+  - `completeWith()` asserts that `report.degraded === false` to guarantee no false healthy states.
+  - `degradeWith()` asserts that `report.degraded === true`.
+  - Attempt submissions are saved to the database **before** evaluation begins, ensuring persistence even if an evaluator or the server crashes.
+- **Evaluation Report Completeness Semantics**:
+  - `dimensionsMissing: readonly RubricDimension[]`: Explicitly enumerates any of the 8 rubric dimensions for which all supporting evaluators failed (e.g. timed out) or were skipped.
+  - `overallScoreComparable: boolean`: Indicates whether the report's `overallScore` can be fairly compared against baseline scores or other attempts in the learning loop. It is set to `true` if and only if `dimensionsMissing.length === 0`. If any dimension is missing, `overallScoreComparable` is `false`, ensuring that incomplete evaluations do not distort score delta calculations or longitudinal trend analysis.
 
 ---
 

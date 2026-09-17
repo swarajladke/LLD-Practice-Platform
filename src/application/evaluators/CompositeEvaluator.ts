@@ -38,7 +38,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, evaluatorId: string): P
  * - Resolves overlapping dimensions via confidence-weighted averaging.
  * - Nestable inside other CompositeEvaluators.
  */
-export class CompositeEvaluator {
+export class CompositeEvaluator implements Evaluator {
   readonly id: string;
   private readonly evaluators: readonly Evaluator[];
   private readonly timeoutMs: number;
