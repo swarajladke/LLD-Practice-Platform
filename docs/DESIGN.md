@@ -4,11 +4,7 @@
 
 The **LLD Practice Platform** provides a deliberate practice experience for Low-Level Design. The user flow follows a tight, explainable loop:
 
-```
-[Choose Problem] ➔ [Inspect Context & Rubric] ➔ [Author Structured Spec] 
-       ➔ [Submit (Async 201)] ➔ [Poll Status (202)] ➔ [Review Grounded Report (200)] 
-       ➔ [Inspect History & Deltas] ➔ [Address Recurring Weaknesses]
-```
+![User Flow](assets/user-flow.png)
 
 ### Core Constraints & Non-Goals
 - **Scope Boundary**: Pure domain-focused LLD monolith. No microservices, no message queues, no multi-region replication.
@@ -40,114 +36,7 @@ Every abstraction in the system serves a specific, documented architectural purp
 
 ## 3. Mermaid Class Diagram
 
-```mermaid
-classDiagram
-    class Attempt {
-        +string id
-        +string problemId
-        +string learnerId
-        +AttemptStatus status
-        +string idempotencyKey
-        +DesignSpec spec
-        +EvaluationReport report
-        +string evaluationStartedAt
-        +submit(idempotencyKey, spec)
-        +beginEvaluation(spec)
-        +completeWith(report)
-        +degradeWith(report)
-        +fail(reason)
-    }
-
-    class DesignSpec {
-        +string[] assumptions
-        +EntityDefinition[] entities
-        +RelationshipDefinition[] relationships
-        +InterfaceDefinition[] interfaces
-        +TradeoffDefinition[] tradeoffs
-        +string extensibility
-    }
-
-    class Rubric {
-        +string rubricVersion
-        +string[] expectedConcepts
-        +string[] extensionAxes
-        +number minEntities
-        +number minTradeoffs
-        +number godClassMethodThreshold
-        +number minRationaleLength
-        +number minExtensibilityLength
-        +Record~RubricDimension, number~ dimensionWeights
-    }
-
-    class DimensionResult {
-        +RubricDimension criterion
-        +Finding[] findings
-        +number score
-        +number confidence
-        +string[] evaluatorIds
-    }
-
-    class Finding {
-        +EvidenceRef evidenceRef
-        +string concern
-        +string suggestion
-        +string evaluatorId
-    }
-
-    class EvaluationReport {
-        +string attemptId
-        +string rubricVersion
-        +string[] evaluatorsRun
-        +FailedEvaluatorInfo[] evaluatorsFailed
-        +string[] evaluatorsSkipped
-        +RubricDimension[] dimensionsMissing
-        +boolean overallScoreComparable
-        +DimensionResult[] dimensionResults
-        +number overallScore
-        +string summary
-        +boolean degraded
-        +string evaluatedAt
-    }
-
-    class Evaluator {
-        <<interface>>
-        +string id
-        +supports(ctx) boolean
-        +evaluate(ctx) Promise
-    }
-
-    class DeterministicEvaluator {
-        +id: "deterministic"
-        +evaluate(ctx)
-    }
-
-    class LlmEvaluator {
-        +id: "llm"
-        +evaluate(ctx)
-    }
-
-    class CompositeEvaluator {
-        +evaluate(ctx)
-    }
-
-    class EvaluationReportAssembler {
-        +assemble(params) EvaluationReport
-    }
-
-    class SubmissionFormat {
-        <<interface>>
-        +formatId: string
-        +parseAndValidate(rawPayload) FormatParseResult
-    }
-
-    Evaluator <|.. DeterministicEvaluator
-    Evaluator <|.. LlmEvaluator
-    CompositeEvaluator o-- Evaluator : orchestrates
-    Attempt --> DesignSpec
-    Attempt --> EvaluationReport
-    EvaluationReport --> DimensionResult
-    DimensionResult --> Finding
-```
+![Mermaid Class Diagram](assets/class-diagram.png)
 
 ---
 
@@ -207,7 +96,7 @@ When both `DeterministicEvaluator` and `LlmEvaluator` evaluate the same rubric d
 - **Domain Impact**: **Zero domain cost for synchronous evaluators; real architectural extension required for asynchronous human review (not 0%)**.
 - **Analysis**:
   - *Synchronous Evaluators (AST linters, static rule checkers)*: Fit the `Evaluator` port seamlessly at zero domain cost. Any in-process engine implementing `id`, `supports(ctx)`, and `evaluate(ctx)` can be registered into `CompositeEvaluator` without touching domain models or services.
-  - *Asynchronous Human Review Does NOT Fit the Current Port*: The current `Evaluator.evaluate()` contract returns a `Promise<EvaluatorOutput>` governed by a per-evaluator timeout (default 15 seconds) inside an automated background loop. A human mentor reviewing a design over hours or days will always breach the 15s timeout, land in `evaluatorsFailed`, and produce a permanently `degraded: true` report.
+  - *Asynchronous Human Review Does NOT Fit the Current Port*: The current `Evaluator.evaluate()` contract returns a `Promise<readonly DimensionResult[]>` governed by a per-evaluator timeout (default 15 seconds) inside an automated background loop. A human mentor reviewing a design over hours or days will always breach the 15s timeout, land in `evaluatorsFailed`, and produce a permanently `degraded: true` report.
   - **Required Extension Shape (Report Amendment Path)**:
     Supporting human review requires introducing an asynchronous report-amendment lifecycle:
     1. An initial evaluation completes via automated evaluators (`AttemptStatus = 'EVALUATED'`).
@@ -220,23 +109,7 @@ When both `DeterministicEvaluator` and `LlmEvaluator` evaluate the same rubric d
 
 The `Attempt` aggregate root strictly enforces valid lifecycle state transitions:
 
-```mermaid
-stateDiagram-v2
-    [*] --> DRAFT : createDraft()
-    [*] --> SUBMITTED : createSubmitted()
-    
-    DRAFT --> SUBMITTED : submit(idempotencyKey)
-    SUBMITTED --> EVALUATING : beginEvaluation(spec)
-    
-    EVALUATING --> EVALUATED : completeWith(healthyReport) [degraded=false]
-    EVALUATING --> EVALUATED : degradeWith(partialReport) [degraded=true]
-    
-    SUBMITTED --> FAILED : fail(reason)
-    EVALUATING --> FAILED : fail(reason) / stale-sweep
-    
-    EVALUATED --> [*]
-    FAILED --> [*]
-```
+![State Machine & Lifecycle Transitions](assets/state-machine.png)
 
 ### Invariants & Lifecycle Semantics
 

@@ -1,0 +1,106 @@
+classDiagram
+    class Attempt {
+        +string id
+        +string problemId
+        +string learnerId
+        +AttemptStatus status
+        +string idempotencyKey
+        +DesignSpec spec
+        +EvaluationReport report
+        +string evaluationStartedAt
+        +submit(idempotencyKey, spec)
+        +beginEvaluation(spec)
+        +completeWith(report)
+        +degradeWith(report)
+        +fail(reason)
+    }
+
+    class DesignSpec {
+        +string[] assumptions
+        +EntityDefinition[] entities
+        +RelationshipDefinition[] relationships
+        +InterfaceDefinition[] interfaces
+        +TradeoffDefinition[] tradeoffs
+        +string extensibility
+    }
+
+    class Rubric {
+        +string rubricVersion
+        +string[] expectedConcepts
+        +string[] extensionAxes
+        +number minEntities
+        +number minTradeoffs
+        +number godClassMethodThreshold
+        +number minRationaleLength
+        +number minExtensibilityLength
+        +Record~RubricDimension, number~ dimensionWeights
+    }
+
+    class DimensionResult {
+        +RubricDimension criterion
+        +Finding[] findings
+        +number score
+        +number confidence
+        +string[] evaluatorIds
+    }
+
+    class Finding {
+        +EvidenceRef evidenceRef
+        +string concern
+        +string suggestion
+        +string evaluatorId
+    }
+
+    class EvaluationReport {
+        +string attemptId
+        +string rubricVersion
+        +string[] evaluatorsRun
+        +FailedEvaluatorInfo[] evaluatorsFailed
+        +string[] evaluatorsSkipped
+        +RubricDimension[] dimensionsMissing
+        +boolean overallScoreComparable
+        +DimensionResult[] dimensionResults
+        +number overallScore
+        +string summary
+        +boolean degraded
+        +string evaluatedAt
+    }
+
+    class Evaluator {
+        <<interface>>
+        +string id
+        +supports(ctx) boolean
+        +evaluate(ctx) Promise
+    }
+
+    class DeterministicEvaluator {
+        +id: "deterministic"
+        +evaluate(ctx)
+    }
+
+    class LlmEvaluator {
+        +id: "llm"
+        +evaluate(ctx)
+    }
+
+    class CompositeEvaluator {
+        +evaluate(ctx)
+    }
+
+    class EvaluationReportAssembler {
+        +assemble(params) EvaluationReport
+    }
+
+    class SubmissionFormat {
+        <<interface>>
+        +formatId: string
+        +parseAndValidate(rawPayload) FormatParseResult
+    }
+
+    Evaluator <|.. DeterministicEvaluator
+    Evaluator <|.. LlmEvaluator
+    CompositeEvaluator o-- Evaluator : orchestrates
+    Attempt --> DesignSpec
+    Attempt --> EvaluationReport
+    EvaluationReport --> DimensionResult
+    DimensionResult --> Finding

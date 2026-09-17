@@ -1,0 +1,15 @@
+stateDiagram-v2
+    [*] --> DRAFT : createDraft()
+    [*] --> SUBMITTED : createSubmitted()
+    
+    DRAFT --> SUBMITTED : submit(idempotencyKey)
+    SUBMITTED --> EVALUATING : beginEvaluation(spec)
+    
+    EVALUATING --> EVALUATED : completeWith(healthyReport) [degraded=false]
+    EVALUATING --> EVALUATED : degradeWith(partialReport) [degraded=true]
+    
+    SUBMITTED --> FAILED : fail(reason)
+    EVALUATING --> FAILED : fail(reason) / stale-sweep
+    
+    EVALUATED --> [*]
+    FAILED --> [*]
